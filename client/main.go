@@ -7,6 +7,7 @@ import (
 	"gopack/rsautil"
 	"gopack/tlv"
 	"net"
+	"tcp"
 	"time"
 
 	"gopack/xbyte"
@@ -62,18 +63,35 @@ func handleUDPConn(conn *net.UDPConn, ch chan bool) { // Должен перес
 		buf.Reset()
 		switch tag {
 		case 1025:
-			if TcpEn {
-				return
-			}
-
 			hubTCPAddr, err = net.ResolveTCPAddr("tcp", string(val))
 			if err != nil {
 				fmt.Println("ResolveTCPAddr", err)
 				continue
 			}
 
+			tcp := tcp.NewTCP(publicKey, hubTCPAddr)
 			fmt.Println("Пробует подключиться по tcp")
-			toConnCh <- true
+			err = tcp.Dial()
+			if err != nil {
+				fmt.Println("Tcp connect", err)
+				continue
+			}
+
+			err = tcp.Write(3073, telemetry)
+			if err != nil {
+				fmt.Println("tcp.Write", err)
+				continue
+			}
+			// go func() {
+			// 	rw := tlv.NewReadWriter(conn)
+			// 	for {
+			// 		err = handleTCPConn(rw)
+			// 		if err != nil {
+			// 			conn.Close()
+			// 			TcpEn = false
+			// 		}
+			// 	}
+			// }()
 		case 1:
 			fmt.Println("Hub err response:", string(val))
 		default:
@@ -108,7 +126,6 @@ func handleTCPConn(rw tlv.ReadWriter) error {
 }
 
 func main() {
-	toConnCh = make(chan bool, 1)
 	TcpEn = false
 
 	publicKey, err = rsautil.PemToPublicKey("public.pem")
@@ -134,54 +151,6 @@ func main() {
 		fmt.Println("ResolveUDPAddr", err)
 		return
 	}
-
-	go func() { // tcp подключение к хабу для получения ip сервера
-		for {
-			<-toConnCh
-			conn, err := net.DialTCP("tcp", nil, hubTCPAddr)
-			if err != nil {
-				fmt.Println("DialTCP", err)
-				continue
-			}
-
-			TcpEn = true
-			hubPublicKey, err = rsaSetup(conn, publicKey)
-			if err != nil {
-				fmt.Println("rsaSetup", err)
-				conn.Close()
-				TcpEn = false
-				continue
-			}
-
-			enc, err := rsautil.EncryptPKCS1(hubPublicKey, telemetry)
-			if err != nil {
-				fmt.Println("EncryptPKCS1", err)
-				conn.Close()
-				TcpEn = false
-				continue
-			}
-
-			rw := tlv.NewReadWriter(conn)
-			err = rw.Write(3073, enc)
-			if err != nil {
-				fmt.Println("Conn write", err)
-				conn.Close()
-				TcpEn = false
-				continue
-			}
-
-			go func() {
-				rw := tlv.NewReadWriter(conn)
-				for {
-					err = handleTCPConn(rw)
-					if err != nil {
-						conn.Close()
-						TcpEn = false
-					}
-				}
-			}()
-		}
-	}()
 
 	conn, err := net.ListenUDP("udp", laddr)
 	if err != nil {
@@ -218,39 +187,4 @@ func main() {
 		// fmt.Println(n)
 		time.Sleep(time.Second * 5)
 	}
-}
-
-func rsaSetup(conn *net.TCPConn, publicKey *rsa.PublicKey) (remotePublicKey *rsa.PublicKey, err error) {
-	fmt.Println("asfgdhf")
-	rw := tlv.NewReadWriter(conn)
-	go func() {
-		tag, val, err := rw.Read()
-		if tag != 2 {
-			rw.Write(1, []byte("First send public key"))
-			return
-		}
-
-		if err != nil {
-			fmt.Println("Tlv", err)
-			return
-		}
-
-		remotePublicKey, err = xbyte.ByteToRsaPublic(val)
-		if err != nil {
-			fmt.Println("ByteToRsaPublic", err)
-			return
-		}
-	}()
-
-	dst, err := xbyte.RsaPublicToByte(publicKey)
-	if err != nil {
-		fmt.Println("RsaPublicToByte", err)
-		return
-	}
-	err = rw.Write(2, dst)
-	if err != nil {
-		fmt.Println("Send public key", err)
-		return
-	}
-	return
 }

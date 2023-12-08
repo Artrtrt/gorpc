@@ -363,37 +363,3 @@ func toSql(dbChan chan bool) (err error) {
 	// fmt.Println(storage)
 	return
 }
-
-func rsaSetup(conn *net.TCPConn, publicKey *rsa.PublicKey) (remotePublicKey *rsa.PublicKey, err error) {
-	rw := tlv.NewReadWriter(conn)
-	go func() {
-		tag, val, err := rw.Read()
-		if tag != 2 {
-			rw.Write(1, []byte("First send public key"))
-			return
-		}
-
-		if err != nil {
-			fmt.Println("Tlv", err)
-			return
-		}
-
-		remotePublicKey, err = xbyte.ByteToRsaPublic(val)
-		if err != nil {
-			fmt.Println("ByteToRsaPublic", err)
-			return
-		}
-	}()
-
-	dst, err := xbyte.RsaPublicToByte(publicKey)
-	if err != nil {
-		fmt.Println("RsaPublicToByte", err)
-		return
-	}
-	err = rw.Write(2, dst)
-	if err != nil {
-		fmt.Println("Send public key", err)
-		return
-	}
-	return
-}
