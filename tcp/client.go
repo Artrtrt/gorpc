@@ -13,15 +13,17 @@ type TCP struct {
 	RPublicKey *rsa.PublicKey
 	Raddr      *net.TCPAddr
 	PublicKey  *rsa.PublicKey
+	PrivateKey *rsa.PrivateKey
 	Conn       *net.TCPConn
 	Rw         tlv.ReadWriter
 }
 
-func NewTCP(publicKey *rsa.PublicKey, raddr *net.TCPAddr) *TCP {
+func NewTCP(publicKey *rsa.PublicKey, privateKey *rsa.PrivateKey, raddr *net.TCPAddr) *TCP {
 	return &TCP{
 		RPublicKey: nil,
 		Raddr:      raddr,
 		PublicKey:  publicKey,
+		PrivateKey: privateKey,
 		Conn:       nil,
 		Rw:         nil,
 	}
@@ -96,6 +98,22 @@ func (tcp *TCP) Write(tag uint16, val []byte) (err error) {
 	err = tcp.Rw.Write(tag, enc)
 	if err != nil {
 		fmt.Println("Tlv", err)
+		return
+	}
+
+	return
+}
+
+func (tcp *TCP) Read() (tag uint16, val []byte, err error) {
+	tag, enc, err := tcp.Rw.Read()
+	if err != nil {
+		fmt.Println("Tlv", err)
+		return
+	}
+
+	val, err = rsautil.DecryptPKCS1(tcp.PrivateKey, enc)
+	if err != nil {
+		fmt.Println("DecryptPKCS1", err)
 		return
 	}
 
