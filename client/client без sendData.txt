@@ -1,0 +1,70 @@
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"net"
+	"time"
+	"tlv"
+
+	"dev.kroks.ru/gopack/xbyte"
+)
+
+type DeviceInfo struct {
+	Mac    [32]byte
+	Uptime int64
+}
+
+func main() {
+	addr, err := net.ResolveUDPAddr("udp", "localhost:2000")
+	if err != nil {
+		fmt.Println("ResolveUDPAddr", err)
+		return
+	}
+
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		fmt.Println("ListenUDP", err)
+		return
+	}
+
+	defer conn.Close()
+
+	go func() {
+		for {
+			var reqBuf bytes.Buffer
+			macBytes := [32]byte{}
+			copy(macBytes[:], []byte("AB:15:31:AA:93:26"))
+			deviceInfo := DeviceInfo{macBytes, time.Now().Unix() - 1000}
+			dst, err := xbyte.StructToByte(deviceInfo)
+			if err != nil {
+				fmt.Println("StructToByte", err)
+				continue
+			}
+
+			rw := tlv.NewReadWriter(&reqBuf)
+			err = rw.Write(uint16(5), dst)
+			if err != nil {
+				fmt.Println("Write", err)
+				continue
+			}
+
+			n, err := conn.WriteToUDP(reqBuf.Bytes(), addr)
+			if err != nil {
+				fmt.Println("WriteToUDP", err)
+				continue
+			}
+
+			fmt.Println(n)
+			time.Sleep(time.Second * 5)
+		}
+	}()
+
+	fmt.Scanf(" ")
+	_, err = net.ListenUDP("udp", addr)
+	// for {
+	// 	buf := []byte{}
+	// 	conn.ReadFromUDP(buf)
+	// 	fmt.Println(buf)
+	// }
+}
