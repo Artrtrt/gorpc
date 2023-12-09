@@ -1,0 +1,6 @@
+*.pem
+*.txt
+*.http
+*.db
+*.sql
+*.exe

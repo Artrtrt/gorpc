@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"tcp"
 	"time"
 
 	"gopack/rsautil"
@@ -25,7 +26,7 @@ type Storage struct {
 	publickey  *rsa.PublicKey
 	Time       int64
 	Sent       bool
-	toConnTPC  bool
+	ToConnTPC  bool
 }
 
 type DeviceInfo struct {
@@ -37,8 +38,8 @@ var (
 	err        error
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
-	tcpAddr    *net.TCPAddr
-	storage    = make(map[[32]byte]Storage)
+	addr       string = "localhost:8080"
+	storage           = make(map[[32]byte]Storage)
 )
 
 func httpServer() (err error) {
@@ -65,8 +66,13 @@ func httpServer() (err error) {
 			}
 
 			payload := storage[macBytes]
-			payload.toConnTPC = true
-			storage[macBytes] = payload
+			if payload.ToConnTPC {
+				fmt.Fprint(rw, "Устройство занято")
+				return
+			} else {
+				payload.ToConnTPC = true
+				storage[macBytes] = payload
+			}
 		}
 	})
 	http.ListenAndServe(":8081", nil)
@@ -113,8 +119,8 @@ func handleUDPConn(conn *net.UDPConn) {
 				payload := storage[deviceInfo.Mac]
 				payload.Time = time
 				storage[deviceInfo.Mac] = payload
-				if payload.toConnTPC {
-					err = rw.Write(1025, []byte(tcpAddr.String()))
+				if payload.ToConnTPC {
+					err = rw.Write(1025, []byte(addr))
 					if err != nil {
 						fmt.Println("Tlv", err)
 						continue
@@ -152,27 +158,19 @@ func handleUDPConn(conn *net.UDPConn) {
 	}
 }
 
-func handleTCPConn(conn *net.TCPConn, clientPublicKey *rsa.PublicKey) {
-	rw := tlv.NewReadWriter(conn)
+func handleTCPConn(conn *tcp.RsaConn) {
 	for {
-		tag, val, err := rw.Read()
+		tag, val, err := conn.Read()
 		if err != nil {
-			time.Sleep(time.Second * 5)
 			return
 		}
 
 		switch tag {
 		case 1:
-			fmt.Printf("Ошибка %s. От устройства %s", string(val), conn.RemoteAddr())
+			fmt.Printf("Device err response: %s", string(val))
 		case 3073:
-			telemetry, err := rsautil.DecryptPKCS1(privateKey, val)
-			if err != nil {
-				fmt.Println("DecryptPKCS1", err)
-				continue
-			}
-
 			deviceInfo := DeviceInfo{}
-			err = xbyte.ByteToStruct(telemetry, &deviceInfo)
+			err = xbyte.ByteToStruct(val, &deviceInfo)
 			if err != nil {
 				fmt.Println("ByteToStruct", err)
 				continue
@@ -180,28 +178,24 @@ func handleTCPConn(conn *net.TCPConn, clientPublicKey *rsa.PublicKey) {
 
 			info, ok := storage[deviceInfo.Mac]
 			if ok {
-				info.toConnTPC = false
+				info.ToConnTPC = false
+				storage[deviceInfo.Mac] = info
 				// server, err := lessBusyServer() и в ответ его адресс
-				encData, err := rsautil.EncryptPKCS1(clientPublicKey, []byte("hello world"))
+				err = conn.Write(1026, []byte("localhost:8082"))
 				if err != nil {
-					fmt.Println("EncryptPKCS1", err)
-					continue
-				}
-
-				err = rw.Write(1026, encData)
-				if err != nil {
-					fmt.Println("Tlv", err)
+					fmt.Println("Conn.Write", err)
 					continue
 				}
 			}
-
 			err = conn.Close()
 			if err != nil {
-				fmt.Println(err)
+				fmt.Println("Conn.Close", err)
+				return
 			}
 
+			return
 		default:
-			rw.Write(1, []byte("Unknown tag"))
+			conn.Write(1, []byte("Unknown tag"))
 		}
 	}
 }
@@ -228,19 +222,19 @@ func main() {
 		os.Exit(1)
 	}()
 
-	tcpAddr, err = net.ResolveTCPAddr("tcp", "localhost:8080")
+	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		fmt.Println("ResolveTCPAddr", err)
 		return
 	}
 
-	tcpListener, err := net.ListenTCP("tcp", tcpAddr)
+	tpcLr, err := net.ListenTCP("tcp", tcpAddr)
 	if err != nil {
 		fmt.Println("ListenTCP", err)
 		return
 	}
 
-	defer tcpListener.Close()
+	defer tpcLr.Close()
 	addr, err := net.ResolveUDPAddr("udp", "localhost:2000")
 	if err != nil {
 		fmt.Println("ResolveUDPAddr", err)
@@ -272,27 +266,23 @@ func main() {
 
 	go func() {
 		for {
-			conn, err := tcpListener.AcceptTCP()
+			conn, err := tpcLr.AcceptTCP()
 			if err != nil {
 				fmt.Println("AcceptTCP", err)
 				continue
 			}
 
 			go func() {
-				defer conn.Close()
-				if conn == nil {
-					fmt.Println("No connection")
-					return
-				}
-
-				clientPublicKey, err := rsaSetup(conn, publicKey)
+				clientPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
 				if err != nil {
-					fmt.Println("rsaSetup", err)
 					conn.Close()
+					fmt.Println("RsaKeyExchange", err)
 					return
 				}
 
-				go handleTCPConn(conn, clientPublicKey)
+				rsaConn := tcp.NewRsaConn(clientPublicKey, privateKey, conn)
+				defer rsaConn.Close()
+				handleTCPConn(rsaConn)
 			}()
 		}
 	}()
