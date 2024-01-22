@@ -2,9 +2,12 @@ package main
 
 import (
 	"crypto/rsa"
+	"encoding/json"
 	"fmt"
-	"gopack/rsautil"
+	"gopack/jsonrpc"
 	"net"
+	"net/http"
+	"rsautil"
 	"tcp"
 )
 
@@ -13,7 +16,32 @@ var (
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 	addr       string = "localhost:8082"
+	httpAddr   string = ":8083"
 )
+
+func handleRPC(w http.ResponseWriter, r *http.Request) {
+	var request jsonrpc.Request
+	err := json.NewDecoder(r.Body).Decode(&request)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	client := jsonrpc.NewClient(jsonrpc.NewClientTransportHttp("http://192.168.1.1/ubus"))
+	response := client.RawRequest(request)
+	byteResponse, err := json.Marshal(response)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Write(byteResponse)
+}
+
+func httpServer(conn *tcp.RsaConn) {
+	http.Handle("/", http.FileServer(http.Dir("./dist")))
+	http.ListenAndServe(httpAddr, http.HandlerFunc(handleRPC))
+}
 
 func main() {
 	publicKey, err = rsautil.PemToPublicKey("public.pem")
@@ -28,6 +56,7 @@ func main() {
 		return
 	}
 
+	go httpServer()
 	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		fmt.Println("ResolveTCPAddr:", err)
@@ -59,14 +88,20 @@ func main() {
 
 			rsaConn := tcp.NewRsaConn(clientPublicKey, privateKey, conn)
 			defer rsaConn.Close()
+			fmt.Println(conn.RemoteAddr().String())
+			requestch := make(chan []byte)
+			responsech := make(chan []byte)
+			go httpServer(requestch, responsech)
 
-			tag, val, err := rsaConn.Read()
-			if err != nil {
-				fmt.Println("Conn read:", err)
-				return
+			for {
+				tag, val, err := rsaConn.Read()
+				if err != nil {
+					fmt.Println("Conn read:", err)
+					return
+				}
+
+				fmt.Println(tag, val)
 			}
-
-			fmt.Println(tag, val)
 		}()
 	}
 }

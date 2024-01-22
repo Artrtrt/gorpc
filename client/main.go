@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"crypto/rsa"
 	"fmt"
-	"gopack/rsautil"
-	"gopack/tlv"
 	"net"
 	"tcp"
 	"time"
 
+	"gopack/tlv"
 	"gopack/xbyte"
+	"rsautil"
 )
 
 type DeviceInfo struct {

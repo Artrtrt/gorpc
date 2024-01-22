@@ -14,9 +14,9 @@ import (
 	"tcp"
 	"time"
 
-	"gopack/rsautil"
 	"gopack/tlv"
 	"gopack/xbyte"
+	"rsautil"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -39,10 +39,11 @@ var (
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 	addr       string = "localhost:8080"
+	httpAddr   string = ":8081"
 	storage           = make(map[[32]byte]Storage)
 )
 
-func httpServer() (err error) {
+func httpServer() {
 	http.HandleFunc("/hub", func(rw http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
 			mac := r.FormValue("mac")
@@ -75,8 +76,7 @@ func httpServer() (err error) {
 			}
 		}
 	})
-	http.ListenAndServe(":8081", nil)
-	return
+	http.ListenAndServe(httpAddr, nil)
 }
 
 func handleUDPConn(conn *net.UDPConn) {

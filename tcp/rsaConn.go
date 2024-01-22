@@ -3,9 +3,9 @@ package tcp
 import (
 	"crypto/rsa"
 	"fmt"
-	"gopack/rsautil"
 	"gopack/tlv"
 	"net"
+	"rsautil"
 )
 
 type RsaConn struct {
