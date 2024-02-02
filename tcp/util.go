@@ -3,12 +3,11 @@ package tcp
 import (
 	"crypto/rsa"
 	"fmt"
-	"gopack/tlv"
+	"gopack/tagrpc"
 	"gopack/xbyte"
-	"net"
 )
 
-func RsaKeyExchange(conn *net.TCPConn, publicKey *rsa.PublicKey) (rPublicKey *rsa.PublicKey, err error) {
+func RsaKeyExchange(conn *tagrpc.TCPConn, publicKey *rsa.PublicKey) (rPublicKey *rsa.PublicKey, err error) {
 	if conn == nil {
 		return nil, fmt.Errorf("%s", "No connection")
 	}
@@ -19,9 +18,8 @@ func RsaKeyExchange(conn *net.TCPConn, publicKey *rsa.PublicKey) (rPublicKey *rs
 
 	keyCh := make(chan *rsa.PublicKey, 1)
 	errCh := make(chan error, 1)
-	rw := tlv.NewReadWriter(conn)
 	go func() {
-		_, val, err := rw.Read()
+		_, val, err := conn.Read()
 		if err != nil {
 			errCh <- fmt.Errorf("%s %s", "Read public key:", err)
 			return
@@ -41,7 +39,7 @@ func RsaKeyExchange(conn *net.TCPConn, publicKey *rsa.PublicKey) (rPublicKey *rs
 		err = fmt.Errorf("%s %s", "RsaPublicToByte:", err)
 		return
 	}
-	err = rw.Write(2, dst)
+	err = conn.Write(2, dst)
 	if err != nil {
 		err = fmt.Errorf("%s %s", "Send public key:", err)
 		return

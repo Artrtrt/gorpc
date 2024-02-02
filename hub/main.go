@@ -14,6 +14,7 @@ import (
 	"tcp"
 	"time"
 
+	"gopack/tagrpc"
 	"gopack/tlv"
 	"gopack/xbyte"
 	"rsautil"
@@ -26,7 +27,7 @@ type Storage struct {
 	publickey  *rsa.PublicKey
 	Time       int64
 	Sent       bool
-	ToConnTPC  bool
+	ToConnTCP  bool
 }
 
 type DeviceInfo struct {
@@ -67,11 +68,11 @@ func httpServer() {
 			}
 
 			payload := storage[macBytes]
-			if payload.ToConnTPC {
+			if payload.ToConnTCP {
 				fmt.Fprint(rw, "Устройство занято")
 				return
 			} else {
-				payload.ToConnTPC = true
+				payload.ToConnTCP = true
 				storage[macBytes] = payload
 			}
 		}
@@ -119,7 +120,7 @@ func handleUDPConn(conn *net.UDPConn) {
 				payload := storage[deviceInfo.Mac]
 				payload.Time = time
 				storage[deviceInfo.Mac] = payload
-				if payload.ToConnTPC {
+				if payload.ToConnTCP {
 					err = rw.Write(1025, []byte(addr))
 					if err != nil {
 						fmt.Println("Tlv", err)
@@ -158,7 +159,7 @@ func handleUDPConn(conn *net.UDPConn) {
 	}
 }
 
-func handleTCPConn(conn *tcp.RsaConn) {
+func handleTCPConn(conn *tagrpc.TCPConn) {
 	for {
 		tag, val, err := conn.Read()
 		if err != nil {
@@ -178,7 +179,7 @@ func handleTCPConn(conn *tcp.RsaConn) {
 
 			info, ok := storage[deviceInfo.Mac]
 			if ok {
-				info.ToConnTPC = false
+				info.ToConnTCP = false
 				storage[deviceInfo.Mac] = info
 				// server, err := lessBusyServer() и в ответ его адресс
 				err = conn.Write(1026, []byte("localhost:8082"))
@@ -228,13 +229,13 @@ func main() {
 		return
 	}
 
-	tpcLr, err := net.ListenTCP("tcp", tcpAddr)
+	tcpLr, err := tagrpc.ListenTCP(tcpAddr)
 	if err != nil {
 		fmt.Println("ListenTCP", err)
 		return
 	}
 
-	defer tpcLr.Close()
+	defer tcpLr.Close()
 	addr, err := net.ResolveUDPAddr("udp", "localhost:2000")
 	if err != nil {
 		fmt.Println("ResolveUDPAddr", err)
@@ -266,23 +267,23 @@ func main() {
 
 	go func() {
 		for {
-			conn, err := tpcLr.AcceptTCP()
+			tcpconn, err := tcpLr.AcceptTCP()
 			if err != nil {
 				fmt.Println("AcceptTCP", err)
 				continue
 			}
-
 			go func() {
-				clientPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
+				clientPublicKey, err := tcp.RsaKeyExchange(tcpconn, publicKey)
 				if err != nil {
-					conn.Close()
+					tcpconn.Close()
 					fmt.Println("RsaKeyExchange", err)
 					return
 				}
 
-				rsaConn := tcp.NewRsaConn(clientPublicKey, privateKey, conn)
-				defer rsaConn.Close()
-				handleTCPConn(rsaConn)
+				tcpconn.Codec = tagrpc.NewRsaCodec(privateKey, clientPublicKey)
+				defer tcpconn.Close()
+				fmt.Println("Подключился " + tcpconn.Tcp.RemoteAddr().String())
+				handleTCPConn(tcpconn)
 			}()
 		}
 	}()

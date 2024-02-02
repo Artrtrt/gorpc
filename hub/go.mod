@@ -18,12 +18,12 @@ require gopack/tlv v0.0.0
 
 require rsautil v0.0.0
 
-require github.com/mattn/go-sqlite3 v1.14.18
+require github.com/mattn/go-sqlite3 v1.14.19
 
-require tcp v0.0.0-00010101000000-000000000000
+require gopack/tagrpc v0.0.0-00010101000000-000000000000
 
 require (
-	golang.org/x/crypto v0.7.0 // indirect
-	golang.org/x/sys v0.6.0 // indirect
-	gopack/tagrpc v0.0.0-00010101000000-000000000000 // indirect
+	golang.org/x/crypto v0.18.0 // indirect
+	golang.org/x/sys v0.16.0 // indirect
+	tcp v0.0.0-00010101000000-000000000000 // indirect
 )

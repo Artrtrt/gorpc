@@ -1,14 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rsa"
 	"encoding/json"
 	"fmt"
 	"gopack/jsonrpc"
+	"gopack/tagrpc"
+	"gopack/tlv"
+	"gopack/xbyte"
 	"net"
 	"net/http"
 	"rsautil"
 	"tcp"
+	"time"
 )
 
 var (
@@ -16,7 +21,7 @@ var (
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 	addr       string = "localhost:8082"
-	httpAddr   string = ":8083"
+	httpAddr   string = "localhost:8083"
 )
 
 func handleRPC(w http.ResponseWriter, r *http.Request) {
@@ -38,9 +43,54 @@ func handleRPC(w http.ResponseWriter, r *http.Request) {
 	w.Write(byteResponse)
 }
 
-func httpServer(conn *tcp.RsaConn) {
-	http.Handle("/", http.FileServer(http.Dir("./dist")))
-	http.ListenAndServe(httpAddr, http.HandlerFunc(handleRPC))
+func httpServer(port int, raddr string) {
+	// ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	// if err != nil {
+	// 	fmt.Println("Listen:", err)
+	// 	return
+	// }
+
+	// http.FileServer(http.Dir("./dist"))
+	// fmt.Println("Веб интерфейс:", ln.Addr())
+	// err = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 	request, err := io.ReadAll(r.Body)
+	// 	if err != nil {
+	// 		http.Error(w, err.Error(), http.StatusBadRequest)
+	// 		return
+	// 	}
+
+	// 	response, err := conn.Execute(1000, request)
+	// 	if err != nil {
+	// 		http.Error(w, err.Error(), http.StatusBadRequest)
+	// 		return
+	// 	}
+
+	// 	w.Write(response)
+	// }))
+
+	// if err != nil {
+	// 	fmt.Println("Serve:", err)
+	// 	return
+	// }
+	fmt.Println(port)
+	mux := http.NewServeMux()
+	mux.Handle("/", http.FileServer(http.Dir("./dist")))
+	http.ListenAndServe(fmt.Sprintf(":%d", port), mux)
+	// http.ListenAndServe(httpAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 	request, err := io.ReadAll(r.Body)
+	// 	if err != nil {
+	// 		http.Error(w, err.Error(), http.StatusBadRequest)
+	// 		return
+	// 	}
+
+	// 	response, err := conn.Execute(1000, request)
+	// 	if err != nil {
+	// 		http.Error(w, err.Error(), http.StatusBadRequest)
+	// 		return
+	// 	}
+
+	// 	w.Write(response)
+	// }))
 }
 
 func main() {
@@ -56,52 +106,130 @@ func main() {
 		return
 	}
 
-	go httpServer()
 	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		fmt.Println("ResolveTCPAddr:", err)
 		return
 	}
 
-	tpcLr, err := net.ListenTCP("tcp", tcpAddr)
+	tcpLr, err := tagrpc.ListenTCP(tcpAddr)
 	if err != nil {
 		fmt.Println("ListenTCP:", err)
 		return
 	}
 
-	defer tpcLr.Close()
+	defer tcpLr.Close()
+
+	go sendData()
 
 	for {
-		conn, err := tpcLr.AcceptTCP()
+		conn, err := tcpLr.AcceptTCP()
 		if err != nil {
 			fmt.Println("AcceptTCP:", err)
 			continue
 		}
 
 		go func() {
+			raddr := conn.Tcp.RemoteAddr().String()
+			defer func() {
+				fmt.Printf("Соединение с %s разорвано\n", raddr)
+				conn.Close()
+			}()
+
 			clientPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
 			if err != nil {
-				conn.Close()
 				fmt.Println("RsaKeyExchange:", err)
 				return
 			}
 
-			rsaConn := tcp.NewRsaConn(clientPublicKey, privateKey, conn)
-			defer rsaConn.Close()
-			fmt.Println(conn.RemoteAddr().String())
-			requestch := make(chan []byte)
-			responsech := make(chan []byte)
-			go httpServer(requestch, responsech)
+			conn.Codec = tagrpc.NewRsaCodec(privateKey, clientPublicKey)
+			fmt.Println("Подключился ", raddr)
+
+			listener, err := net.Listen("tcp", "localhost:0")
+			if err != nil {
+				fmt.Println("Ошибка при открытии порта:", err)
+				return
+			}
+			defer listener.Close()
+
+			port := listener.Addr().(*net.TCPAddr).Port
+			go httpServer(port, raddr)
 
 			for {
-				tag, val, err := rsaConn.Read()
+				tag, val, err := conn.Read()
 				if err != nil {
 					fmt.Println("Conn read:", err)
 					return
 				}
+				// var deviceInfo DeviceInfo
+				// xbyte.ByteToStruct(val, &deviceInfo)
+				// fmt.Println(string(deviceInfo.Mac[:]))
+				// fmt.Println(deviceInfo.Uptime)
 
 				fmt.Println(tag, val)
 			}
 		}()
 	}
+}
+
+func sendData() {
+	for {
+		var reqBuf bytes.Buffer
+		macBytes := [32]byte{}
+		copy(macBytes[:], []byte("AB:15:31:AA:93:26"))
+		deviceInfo := DeviceInfo{macBytes, time.Now().Unix() - 1000}
+		telemetry, err = xbyte.StructToByte(deviceInfo)
+		if err != nil {
+			fmt.Println("StructToByte:", err)
+			continue
+		}
+		rw := tlv.NewReadWriter(&reqBuf)
+		err = rw.Write(uint16(3073), telemetry)
+		if err != nil {
+			fmt.Println("Tlv:", err)
+			continue
+		}
+
+		_, err = conn.WriteToUDP(reqBuf.Bytes(), hubUDPAddr)
+		if err != nil {
+			fmt.Println("WriteToUDP:", err)
+			continue
+		}
+
+		// fmt.Println(n)
+		time.Sleep(time.Second * 5)
+	}
+}
+
+// dir, _ := os.Open("./dist")
+// defer dir.Close()
+// files, err := dir.Readdir(-1)
+// if err != nil {
+// 	fmt.Println(err)
+// 	return
+// }
+
+// var fileName string
+// for _, file := range files {
+// 	match, err := regexp.MatchString("app\\.*\\.js", file.Name())
+// 	if err != nil {
+// 		fmt.Println(err)
+// 		return
+// 	}
+
+// 	if match {
+// 		fileName = file.Name()
+// 	}
+// }
+
+// byteContent, err := ioutil.ReadFile(fmt.Sprintf("./dist/js/%s", fileName))
+// if err != nil {
+// 	fmt.Println(err)
+// 	return
+// }
+
+// fmt.Sprintf(string(byteContent), raddr)
+type DeviceInfo struct {
+	Mac    [32]byte
+	Uptime int64
 }

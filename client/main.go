@@ -8,6 +8,7 @@ import (
 	"tcp"
 	"time"
 
+	"gopack/tagrpc"
 	"gopack/tlv"
 	"gopack/xbyte"
 	"rsautil"
@@ -59,35 +60,36 @@ func handleUDPConn(conn *net.UDPConn) { // Должен перестать сл�
 		buf.Reset()
 		switch tag {
 		case 1025:
-			fmt.Println("Подключается к хабу")
 			hubAddr, err := net.ResolveTCPAddr("tcp", string(val))
 			if err != nil {
 				fmt.Println("ResolveTCPAddr:", err)
 				continue
 			}
 
-			conn, err := net.DialTCP("tcp", nil, hubAddr)
+			tcpconn, err := tagrpc.DialTCP(nil, hubAddr)
 			if err != nil {
 				fmt.Println("DialTCP:", err)
 				continue
 			}
 
-			hubPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
+			hubPublicKey, err := tcp.RsaKeyExchange(tcpconn, publicKey)
 			if err != nil {
 				conn.Close()
 				fmt.Println("RsaKeyExchange:", err)
 				continue
 			}
 
-			rsaConn := tcp.NewRsaConn(hubPublicKey, privateKey, conn)
-			err = rsaConn.Write(3073, telemetry)
+			rsacodec := tagrpc.NewRsaCodec(privateKey, hubPublicKey)
+			tcpconn.Codec = rsacodec
+			err = tcpconn.Write(3073, telemetry)
 			if err != nil {
-				rsaConn.Close()
-				fmt.Println("RSAConn:", err)
+				tcpconn.Close()
+				fmt.Println("tcpconn:", err)
 				continue
 			}
 
-			go handleTCPConn(rsaConn)
+			fmt.Println("Подключился к хабу")
+			go handleTCPConn(tcpconn)
 		case 1:
 			fmt.Println("Hub err response:", string(val))
 		default:
@@ -96,7 +98,7 @@ func handleUDPConn(conn *net.UDPConn) { // Должен перестать сл�
 	}
 }
 
-func handleTCPConn(conn *tcp.RsaConn) {
+func handleTCPConn(conn *tagrpc.TCPConn) {
 	for {
 		tag, val, err := conn.Read()
 		if err != nil {
@@ -108,6 +110,9 @@ func handleTCPConn(conn *tcp.RsaConn) {
 		case 1:
 			fmt.Println("Hub err response:", string(val))
 		case 1026:
+			val = bytes.TrimRightFunc(val, func(r rune) bool {
+				return r == 0
+			})
 			go connectToServer(string(val))
 			conn.Close()
 			return
@@ -118,33 +123,46 @@ func handleTCPConn(conn *tcp.RsaConn) {
 }
 
 func connectToServer(addr string) {
-	fmt.Println("Подключается к северу")
 	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		fmt.Println("ResolveTCPAddr:", err)
 		return
 	}
 
-	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	conn, err := tagrpc.DialTCP(nil, tcpAddr)
 	if err != nil {
 		fmt.Println("DialTCP:", err)
 		return
 	}
 
+	raddr := conn.Tcp.RemoteAddr().String()
+	defer func() {
+		fmt.Printf("Соединение с сервером %s разорвано\n", raddr)
+		conn.Close()
+	}()
+
 	serverPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
 	if err != nil {
-		conn.Close()
 		fmt.Println("RsaKeyExchange:", err)
 		return
 	}
 
-	rsaConn := tcp.NewRsaConn(serverPublicKey, privateKey, conn)
-	defer rsaConn.Close()
-
-	err = rsaConn.Write(3073, telemetry)
+	conn.Codec = tagrpc.NewRsaCodec(privateKey, serverPublicKey)
+	err = conn.Write(3073, telemetry)
 	if err != nil {
 		fmt.Println("RSAConn:", err)
 		return
+	}
+
+	fmt.Printf("Подключился к северу %s\n", raddr)
+	for {
+		tag, val, err := conn.Read()
+		if err != nil {
+			fmt.Println("Conn read:", err)
+			return
+		}
+
+		fmt.Println(tag, val)
 	}
 }
 
