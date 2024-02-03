@@ -311,30 +311,32 @@ func main() {
 	// 	}
 	// }()
 
-	go func() {
-		for {
-			tcpconn, err := tcpLr.AcceptTCP()
-			if err != nil {
-				fmt.Println("AcceptTCP", err)
-				continue
-			}
-			go func() {
-				clientPublicKey, err := tcp.RsaKeyExchange(tcpconn, publicKey)
-				if err != nil {
-					tcpconn.Close()
-					fmt.Println("RsaKeyExchange", err)
-					return
-				}
-
-				tcpconn.Codec = tagrpc.NewRsaCodec(privateKey, clientPublicKey)
-				defer tcpconn.Close()
-				fmt.Println("Подключился " + tcpconn.Tcp.RemoteAddr().String())
-				handleTCPConn(tcpconn)
-			}()
-		}
-	}()
+	go acceptTcp(tcpLr)
 
 	handleUDPConn(udpListener)
+}
+
+func acceptTcp(lr *tagrpc.TCPListener) {
+	for {
+		tcpconn, err := lr.AcceptTCP()
+		if err != nil {
+			fmt.Println("AcceptTCP", err)
+			continue
+		}
+		go func() {
+			clientPublicKey, err := tcp.RsaKeyExchange(tcpconn, publicKey)
+			if err != nil {
+				tcpconn.Close()
+				fmt.Println("RsaKeyExchange", err)
+				return
+			}
+
+			tcpconn.Codec = tagrpc.NewRsaCodec(privateKey, clientPublicKey)
+			defer tcpconn.Close()
+			fmt.Println("Подключился " + tcpconn.Tcp.RemoteAddr().String())
+			handleTCPConn(tcpconn)
+		}()
+	}
 }
 
 func deviceByMac() {

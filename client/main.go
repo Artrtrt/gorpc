@@ -196,6 +196,10 @@ func main() {
 	defer conn.Close()
 	go handleUDPConn(conn)
 
+	sendData(conn)
+}
+
+func sendData(conn *net.UDPConn) {
 	for {
 		var reqBuf bytes.Buffer
 		macBytes := [32]byte{}

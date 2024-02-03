@@ -185,8 +185,12 @@ func main() {
 	control := typedef.NewServerInfoControl(byteAddr, 1000)
 	go sendData(conn, control)
 
+	acceptTcp(tcpLr)
+}
+
+func acceptTcp(lr *tagrpc.TCPListener) {
 	for {
-		conn, err := tcpLr.AcceptTCP()
+		conn, err := lr.AcceptTCP()
 		if err != nil {
 			fmt.Println("AcceptTCP:", err)
 			continue
