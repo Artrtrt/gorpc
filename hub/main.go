@@ -27,7 +27,7 @@ type DeviceStorage struct {
 	DeviceInfo typedef.DeviceInfo
 	Time       int64
 	Sent       bool
-	Busy       bool
+	ToConnTCP  bool
 }
 
 type ServerStorage struct {
@@ -68,11 +68,12 @@ func httpServer() {
 			}
 
 			payload := deviceStorage[macBytes]
-			if payload.Busy {
+			if payload.DeviceInfo.Busy {
 				fmt.Fprint(rw, "Устройство занято")
 				return
 			} else {
-				payload.Busy = true
+				payload.ToConnTCP = true
+				payload.DeviceInfo.Busy = true
 				deviceStorage[macBytes] = payload
 			}
 		}
@@ -137,8 +138,9 @@ func handleUDPConn(conn *net.UDPConn) {
 			if ok {
 				data := deviceStorage[deviceInfo.Mac]
 				data.Time = time
+				data.DeviceInfo = deviceInfo
 				deviceStorage[deviceInfo.Mac] = data
-				if data.Busy {
+				if data.ToConnTCP {
 					err = rw.Write(1025, []byte(addr))
 					if err != nil {
 						fmt.Println("Tlv", err)
@@ -187,7 +189,7 @@ func handleTCPConn(conn *tagrpc.TCPConn) {
 		switch tag {
 		case 1:
 			fmt.Printf("Device err response: %s", string(val))
-		case 3073:
+		case 3075:
 			deviceInfo := typedef.DeviceInfo{}
 			err = xbyte.ByteToStruct(val, &deviceInfo)
 			if err != nil {
@@ -198,12 +200,20 @@ func handleTCPConn(conn *tagrpc.TCPConn) {
 			info, ok := deviceStorage[deviceInfo.Mac]
 			if !ok {
 				conn.Write(1, []byte("Unknown device"))
+				continue
 			}
 
+			info.ToConnTCP = false
 			deviceStorage[deviceInfo.Mac] = info
-			addr := lessBusyServer(serverStorage)
+			addr, err := lessBusyServer(serverStorage)
+			if err != nil {
+				conn.Write(1, []byte(fmt.Sprintf("lessBusyServer %s", err)))
+				fmt.Println("lessBusyServer", err)
+				continue
+			}
+
 			if addr[0] == 0 {
-				fmt.Println("Wrong server addr", err)
+				fmt.Println("Wrong server addr")
 				continue
 			}
 
@@ -237,7 +247,12 @@ func handleTCPConn(conn *tagrpc.TCPConn) {
 	}
 }
 
-func lessBusyServer(storage map[[32]byte]typedef.ServerInfo) (serverAddr [32]byte) {
+func lessBusyServer(storage map[[32]byte]typedef.ServerInfo) (serverAddr [32]byte, err error) {
+	if len(storage) == 0 {
+		err = fmt.Errorf("No servers")
+		return
+	}
+
 	maxFreeConnections := 0
 	for addr, server := range storage {
 		if (server.ConnectionLimit - server.ConnectionCount) > uint32(maxFreeConnections) {

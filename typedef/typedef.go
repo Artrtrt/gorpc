@@ -5,6 +5,7 @@ import "errors"
 type DeviceInfo struct {
 	Mac    [32]byte
 	Uptime int64
+	Busy   bool
 }
 
 type ServerInfo struct {

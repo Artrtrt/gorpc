@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	err       error
-	telemetry []byte
+	err  error
+	info typedef.DeviceInfo
 
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
@@ -56,36 +56,14 @@ func handleUDPConn(conn *net.UDPConn) { // Должен перестать сл�
 		buf.Reset()
 		switch tag {
 		case 1025:
-			hubAddr, err := net.ResolveTCPAddr("tcp", string(val))
+			conn, err := InitConnect(string(val))
 			if err != nil {
-				fmt.Println("ResolveTCPAddr:", err)
-				continue
-			}
-
-			tcpconn, err := tagrpc.DialTCP(nil, hubAddr)
-			if err != nil {
-				fmt.Println("DialTCP:", err)
-				continue
-			}
-
-			hubPublicKey, err := tcp.RsaKeyExchange(tcpconn, publicKey)
-			if err != nil {
+				fmt.Println("InitConnect", err)
 				conn.Close()
-				fmt.Println("RsaKeyExchange:", err)
 				continue
 			}
-
-			rsacodec := tagrpc.NewRsaCodec(privateKey, hubPublicKey)
-			tcpconn.Codec = rsacodec
-			err = tcpconn.Write(3073, telemetry)
-			if err != nil {
-				tcpconn.Close()
-				fmt.Println("tcpconn:", err)
-				continue
-			}
-
 			fmt.Println("Подключился к хабу")
-			go handleTCPConn(tcpconn)
+			go handleTCPConn(conn)
 		case 1:
 			fmt.Println("Hub err response:", string(val))
 		default:
@@ -109,57 +87,70 @@ func handleTCPConn(conn *tagrpc.TCPConn) {
 			val = bytes.TrimRightFunc(val, func(r rune) bool {
 				return r == 0
 			})
-			go connectToServer(string(val))
-			conn.Close()
-			return
+
+			conn, err := InitConnect(string(val))
+			if err != nil {
+				fmt.Println("InitConnect", err)
+				conn.Close()
+				continue
+			}
+
+			fmt.Printf("Подключился к серверу %s\n", conn.Tcp.RemoteAddr())
+			go func() { // Дальше будет доделываться(это прием инфы от сервера)
+				for {
+					tag, val, err := conn.Read()
+					if err != nil {
+						fmt.Println("Conn read:", err)
+						return
+					}
+
+					fmt.Println(tag, val)
+				}
+			}()
 		default:
 			conn.Write(1, []byte("Unknown tag"))
 		}
 	}
 }
 
-func connectToServer(addr string) {
+func InitConnect(addr string) (conn *tagrpc.TCPConn, err error) {
 	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
-		fmt.Println("ResolveTCPAddr:", err)
+		err = fmt.Errorf("ResolveTCPAddr: %s", err)
 		return
 	}
 
-	conn, err := tagrpc.DialTCP(nil, tcpAddr)
+	conn, err = tagrpc.DialTCP(nil, tcpAddr)
 	if err != nil {
-		fmt.Println("DialTCP:", err)
+		err = fmt.Errorf("DialTCP: %s", err)
 		return
 	}
-
-	raddr := conn.Tcp.RemoteAddr().String()
-	defer func() {
-		fmt.Printf("Соединение с сервером %s разорвано\n", raddr)
-		conn.Close()
-	}()
 
 	serverPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
 	if err != nil {
-		fmt.Println("RsaKeyExchange:", err)
+		err = fmt.Errorf("RsaKeyExchange: %s", err)
 		return
 	}
 
 	conn.Codec = tagrpc.NewRsaCodec(privateKey, serverPublicKey)
-	err = conn.Write(3073, telemetry)
 	if err != nil {
-		fmt.Println("RSAConn:", err)
+		err = fmt.Errorf("dialTcp: %s", err)
 		return
 	}
 
-	fmt.Printf("Подключился к северу %s\n", raddr)
-	for {
-		tag, val, err := conn.Read()
-		if err != nil {
-			fmt.Println("Conn read:", err)
-			return
-		}
-
-		fmt.Println(tag, val)
+	telemetry, err := xbyte.StructToByte(info)
+	if err != nil {
+		err = fmt.Errorf("StructToByte: %s", err)
+		return
 	}
+
+	err = conn.Write(3075, telemetry)
+	if err != nil {
+		err = fmt.Errorf("conn.Write: %s", err)
+		return
+	}
+
+	return
 }
 
 func main() {
@@ -196,20 +187,22 @@ func main() {
 	defer conn.Close()
 	go handleUDPConn(conn)
 
-	sendData(conn)
+	macBytes := [32]byte{}
+	copy(macBytes[:], []byte("AB:15:31:AA:93:26"))
+	deviceInfo := typedef.DeviceInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
+	info = deviceInfo
+	sendData(conn, info)
 }
 
-func sendData(conn *net.UDPConn) {
+func sendData(conn *net.UDPConn, deviceInfo typedef.DeviceInfo) {
 	for {
 		var reqBuf bytes.Buffer
-		macBytes := [32]byte{}
-		copy(macBytes[:], []byte("AB:15:31:AA:93:26"))
-		deviceInfo := typedef.DeviceInfo{macBytes, time.Now().Unix() - 1000}
-		telemetry, err = xbyte.StructToByte(deviceInfo)
+		telemetry, err := xbyte.StructToByte(deviceInfo)
 		if err != nil {
 			fmt.Println("StructToByte:", err)
 			continue
 		}
+
 		rw := tlv.NewReadWriter(&reqBuf)
 		err = rw.Write(uint16(3073), telemetry)
 		if err != nil {
