@@ -14,14 +14,16 @@ import (
 	"rsautil"
 	"tcp"
 	"time"
+	"typedef"
 )
 
 var (
-	err        error
-	privateKey *rsa.PrivateKey
-	publicKey  *rsa.PublicKey
-	addr       string = "localhost:8082"
-	httpAddr   string = "localhost:8083"
+	err                  error
+	privateKey           *rsa.PrivateKey
+	publicKey            *rsa.PublicKey
+	addr                 string = "localhost:8082"
+	hubUDPAddr           *net.UDPAddr
+	wantToConnectStorage = make(map[[32]byte]typedef.DeviceInfo)
 )
 
 func handleRPC(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +43,46 @@ func handleRPC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Write(byteResponse)
+}
+
+func handleTCP(conn *tagrpc.TCPConn) {
+	for {
+		tag, val, err := conn.Read()
+		if err != nil {
+			return
+		}
+
+		switch tag {
+		case 1:
+			fmt.Println("Hub err response:", string(val))
+		case 1027:
+			var deviceInfo typedef.DeviceInfo
+			err = xbyte.ByteToStruct(val, &deviceInfo)
+			if err != nil {
+				fmt.Println("ByteToStruct", err)
+				continue
+			}
+
+			_, ok := wantToConnectStorage[deviceInfo.Mac]
+			if ok {
+				continue
+			}
+
+			wantToConnectStorage[deviceInfo.Mac] = deviceInfo
+		case 3075:
+			var deviceInfo typedef.DeviceInfo
+			err = xbyte.ByteToStruct(val, &deviceInfo)
+			if err != nil {
+				fmt.Println("ByteToStruct", err)
+				continue
+			}
+
+			_, ok := wantToConnectStorage[deviceInfo.Mac]
+			if ok {
+				continue
+			}
+		}
+	}
 }
 
 func httpServer(port int, raddr string) {
@@ -118,9 +160,30 @@ func main() {
 		return
 	}
 
+	laddr, err := net.ResolveUDPAddr("udp", ":0")
+	if err != nil {
+		fmt.Println("ResolveUDPAddr:", err)
+		return
+	}
+
+	hubUDPAddr, err = net.ResolveUDPAddr("udp", "localhost:2000")
+	if err != nil {
+		fmt.Println("ResolveUDPAddr:", err)
+		return
+	}
+
+	conn, err := net.ListenUDP("udp", laddr)
+	if err != nil {
+		fmt.Println("ListenUDP:", err)
+		return
+	}
+
 	defer tcpLr.Close()
 
-	go sendData()
+	var byteAddr [32]byte
+	copy(byteAddr[:], []byte(addr))
+	control := typedef.NewServerInfoControl(byteAddr, 1000)
+	go sendData(conn, control)
 
 	for {
 		conn, err := tcpLr.AcceptTCP()
@@ -172,19 +235,17 @@ func main() {
 	}
 }
 
-func sendData() {
+func sendData(conn *net.UDPConn, control *typedef.ServerInfoControl) {
 	for {
 		var reqBuf bytes.Buffer
-		macBytes := [32]byte{}
-		copy(macBytes[:], []byte("AB:15:31:AA:93:26"))
-		deviceInfo := DeviceInfo{macBytes, time.Now().Unix() - 1000}
-		telemetry, err = xbyte.StructToByte(deviceInfo)
+		info, err := xbyte.StructToByte(control.ServerInfo)
 		if err != nil {
 			fmt.Println("StructToByte:", err)
 			continue
 		}
+
 		rw := tlv.NewReadWriter(&reqBuf)
-		err = rw.Write(uint16(3073), telemetry)
+		err = rw.Write(uint16(2049), info)
 		if err != nil {
 			fmt.Println("Tlv:", err)
 			continue
@@ -229,7 +290,3 @@ func sendData() {
 // }
 
 // fmt.Sprintf(string(byteContent), raddr)
-type DeviceInfo struct {
-	Mac    [32]byte
-	Uptime int64
-}

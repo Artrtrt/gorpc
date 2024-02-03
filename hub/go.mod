@@ -4,6 +4,8 @@ go 1.20
 
 replace tcp => ../tcp/
 
+replace typedef => ../typedef/
+
 replace gopack/xbyte => ../../gopack/xbyte/
 
 replace gopack/tlv => ../../gopack/tlv/
@@ -26,4 +28,5 @@ require (
 	golang.org/x/crypto v0.18.0 // indirect
 	golang.org/x/sys v0.16.0 // indirect
 	tcp v0.0.0-00010101000000-000000000000 // indirect
+	typedef v0.0.0-00010101000000-000000000000 // indirect
 )

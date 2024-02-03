@@ -7,17 +7,13 @@ import (
 	"net"
 	"tcp"
 	"time"
+	"typedef"
 
 	"gopack/tagrpc"
 	"gopack/tlv"
 	"gopack/xbyte"
 	"rsautil"
 )
-
-type DeviceInfo struct {
-	Mac    [32]byte
-	Uptime int64
-}
 
 var (
 	err       error
@@ -204,7 +200,7 @@ func main() {
 		var reqBuf bytes.Buffer
 		macBytes := [32]byte{}
 		copy(macBytes[:], []byte("AB:15:31:AA:93:26"))
-		deviceInfo := DeviceInfo{macBytes, time.Now().Unix() - 1000}
+		deviceInfo := typedef.DeviceInfo{macBytes, time.Now().Unix() - 1000}
 		telemetry, err = xbyte.StructToByte(deviceInfo)
 		if err != nil {
 			fmt.Println("StructToByte:", err)

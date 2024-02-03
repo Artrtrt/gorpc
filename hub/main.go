@@ -18,30 +18,30 @@ import (
 	"gopack/tlv"
 	"gopack/xbyte"
 	"rsautil"
+	"typedef"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-type Storage struct {
-	DeviceInfo DeviceInfo
-	publickey  *rsa.PublicKey
+type DeviceStorage struct {
+	DeviceInfo typedef.DeviceInfo
 	Time       int64
 	Sent       bool
-	ToConnTCP  bool
+	Busy       bool
 }
 
-type DeviceInfo struct {
-	Mac    [32]byte
-	Uptime int64
+type ServerStorage struct {
+	ServerInfo typedef.ServerInfo
 }
 
 var (
-	err        error
-	privateKey *rsa.PrivateKey
-	publicKey  *rsa.PublicKey
-	addr       string = "localhost:8080"
-	httpAddr   string = ":8081"
-	storage           = make(map[[32]byte]Storage)
+	err           error
+	privateKey    *rsa.PrivateKey
+	publicKey     *rsa.PublicKey
+	addr          string = "localhost:8080"
+	httpAddr      string = ":8081"
+	deviceStorage        = make(map[[32]byte]DeviceStorage)
+	serverStorage        = make(map[[32]byte]typedef.ServerInfo)
 )
 
 func httpServer() {
@@ -55,25 +55,25 @@ func httpServer() {
 
 			macBytes := [32]byte{}
 			copy(macBytes[:], []byte(mac))
-			_, ok := storage[macBytes]
+			_, ok := deviceStorage[macBytes]
 			if !ok {
 				fmt.Fprint(rw, "Такого устройства нет")
 				return
 			}
 
-			device := storage[macBytes]
+			device := deviceStorage[macBytes]
 			if time.Now().Unix()-device.Time > 120 {
 				fmt.Fprint(rw, "Устройство не доступно")
 				return
 			}
 
-			payload := storage[macBytes]
-			if payload.ToConnTCP {
+			payload := deviceStorage[macBytes]
+			if payload.Busy {
 				fmt.Fprint(rw, "Устройство занято")
 				return
 			} else {
-				payload.ToConnTCP = true
-				storage[macBytes] = payload
+				payload.Busy = true
+				deviceStorage[macBytes] = payload
 			}
 		}
 	})
@@ -106,8 +106,26 @@ func handleUDPConn(conn *net.UDPConn) {
 		switch tag {
 		case 1:
 			fmt.Printf("Ошибка %s. От устройства %s", string(val), raddr.String())
+		case 2049:
+			serverInfo := typedef.ServerInfo{}
+			err = xbyte.ByteToStruct(val, &serverInfo)
+			if err != nil {
+				fmt.Println("ByteToStruct", err)
+				continue
+			}
+
+			_, ok := serverStorage[serverInfo.Addr]
+			if ok {
+				data := serverStorage[serverInfo.Addr]
+				data.ConnectionCount = serverInfo.ConnectionCount
+				data.ConnectionLimit = serverInfo.ConnectionLimit
+			} else {
+				serverStorage[serverInfo.Addr] = typedef.ServerInfo{
+					Addr: serverInfo.Addr, ConnectionCount: serverInfo.ConnectionCount, ConnectionLimit: serverInfo.ConnectionLimit,
+				}
+			}
 		case 3073:
-			deviceInfo := DeviceInfo{}
+			deviceInfo := typedef.DeviceInfo{}
 			err = xbyte.ByteToStruct(val, &deviceInfo)
 			if err != nil {
 				fmt.Println("ByteToStruct", err)
@@ -115,12 +133,12 @@ func handleUDPConn(conn *net.UDPConn) {
 			}
 
 			time := time.Now().Unix()
-			_, ok := storage[deviceInfo.Mac]
+			_, ok := deviceStorage[deviceInfo.Mac]
 			if ok {
-				payload := storage[deviceInfo.Mac]
-				payload.Time = time
-				storage[deviceInfo.Mac] = payload
-				if payload.ToConnTCP {
+				data := deviceStorage[deviceInfo.Mac]
+				data.Time = time
+				deviceStorage[deviceInfo.Mac] = data
+				if data.Busy {
 					err = rw.Write(1025, []byte(addr))
 					if err != nil {
 						fmt.Println("Tlv", err)
@@ -137,8 +155,8 @@ func handleUDPConn(conn *net.UDPConn) {
 				}
 				// fmt.Printf("Данные о роутере %s обновились\n", string(deviceInfo.Mac[:]))
 			} else {
-				storage[deviceInfo.Mac] = Storage{
-					deviceInfo, nil, time, false, false,
+				deviceStorage[deviceInfo.Mac] = DeviceStorage{
+					deviceInfo, time, false, false,
 				}
 				// fmt.Printf("Роутер %s добавлен\n", deviceInfo.Mac)
 			}
@@ -170,24 +188,31 @@ func handleTCPConn(conn *tagrpc.TCPConn) {
 		case 1:
 			fmt.Printf("Device err response: %s", string(val))
 		case 3073:
-			deviceInfo := DeviceInfo{}
+			deviceInfo := typedef.DeviceInfo{}
 			err = xbyte.ByteToStruct(val, &deviceInfo)
 			if err != nil {
 				fmt.Println("ByteToStruct", err)
 				continue
 			}
 
-			info, ok := storage[deviceInfo.Mac]
-			if ok {
-				info.ToConnTCP = false
-				storage[deviceInfo.Mac] = info
-				// server, err := lessBusyServer() и в ответ его адресс
-				err = conn.Write(1026, []byte("localhost:8082"))
-				if err != nil {
-					fmt.Println("Conn.Write", err)
-					continue
-				}
+			info, ok := deviceStorage[deviceInfo.Mac]
+			if !ok {
+				conn.Write(1, []byte("Unknown device"))
 			}
+
+			deviceStorage[deviceInfo.Mac] = info
+			addr := lessBusyServer(serverStorage)
+			if addr[0] == 0 {
+				fmt.Println("Wrong server addr", err)
+				continue
+			}
+
+			err = conn.Write(1026, addr[:])
+			if err != nil {
+				fmt.Println("Conn.Write", err)
+				continue
+			}
+
 			err = conn.Close()
 			if err != nil {
 				fmt.Println("Conn.Close", err)
@@ -195,10 +220,31 @@ func handleTCPConn(conn *tagrpc.TCPConn) {
 			}
 
 			return
+		case 2050:
+			deviceInfo := typedef.DeviceInfo{}
+			err = xbyte.ByteToStruct(val, &deviceInfo)
+			if err != nil {
+				fmt.Println("ByteToStruct", err)
+				continue
+			}
+
+			fmt.Println("Сообщить клиенту адрес куда подключаться")
+		case 2051:
+
 		default:
 			conn.Write(1, []byte("Unknown tag"))
 		}
 	}
+}
+
+func lessBusyServer(storage map[[32]byte]typedef.ServerInfo) (serverAddr [32]byte) {
+	maxFreeConnections := 0
+	for addr, server := range storage {
+		if (server.ConnectionLimit - server.ConnectionCount) > uint32(maxFreeConnections) {
+			serverAddr = addr
+		}
+	}
+	return
 }
 
 func main() {
@@ -329,7 +375,7 @@ func toSql(dbChan chan bool) (err error) {
 		<-dbChan
 	}()
 
-	for key, value := range storage {
+	for key, value := range deviceStorage {
 		if value.Sent {
 			continue
 		}
@@ -340,7 +386,7 @@ func toSql(dbChan chan bool) (err error) {
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 				value.Sent = true
-				storage[key] = value
+				deviceStorage[key] = value
 				continue
 			}
 
@@ -349,7 +395,7 @@ func toSql(dbChan chan bool) (err error) {
 		}
 
 		value.Sent = true
-		storage[key] = value
+		deviceStorage[key] = value
 	}
 	// fmt.Println(storage)
 	return
