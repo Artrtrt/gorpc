@@ -12,6 +12,8 @@ replace tcp => ../tcp/
 
 replace typedef => ../typedef/
 
+replace tag => ../tag/
+
 require gopack/tlv v0.0.0
 
 replace gopack/xbyte => ../../gopack/xbyte/
@@ -27,4 +29,5 @@ require (
 require (
 	golang.org/x/crypto v0.18.0 // indirect
 	golang.org/x/sys v0.16.0 // indirect
+	tag v0.0.0-00010101000000-000000000000 // indirect
 )

@@ -4,15 +4,14 @@ import (
 	"bytes"
 	"crypto/rsa"
 	"fmt"
+	"gopack/tagrpc"
+	"gopack/xbyte"
 	"net"
+	"rsautil"
+	"tag"
 	"tcp"
 	"time"
 	"typedef"
-
-	"gopack/tagrpc"
-	"gopack/tlv"
-	"gopack/xbyte"
-	"rsautil"
 )
 
 var (
@@ -24,53 +23,6 @@ var (
 
 	hubUDPAddr *net.UDPAddr
 )
-
-func handleUDPConn(conn *net.UDPConn) { // Должен перестать слушать, когда клиент подключается к роуетеру или серверу
-	for {
-		data := make([]byte, 1024)
-		_, addr, err := conn.ReadFromUDP(data)
-		if err != nil {
-			fmt.Println("ReadFromUDP:", err)
-			continue
-		}
-
-		if addr.String() != hubUDPAddr.String() {
-			fmt.Println("Unknown addr")
-			continue
-		}
-
-		var buf bytes.Buffer
-		_, err = buf.Write(data)
-		if err != nil {
-			fmt.Println("Buf write:", err)
-			continue
-		}
-
-		rw := tlv.NewReadWriter(&buf)
-		tag, val, err := rw.Read()
-		if err != nil {
-			fmt.Println("Tlv", err)
-			continue
-		}
-
-		buf.Reset()
-		switch tag {
-		case 1025:
-			conn, err := InitConnect(string(val))
-			if err != nil {
-				fmt.Println("InitConnect", err)
-				conn.Close()
-				continue
-			}
-			fmt.Println("Подключился к хабу")
-			go handleTCPConn(conn)
-		case 1:
-			fmt.Println("Hub err response:", string(val))
-		default:
-			rw.Write(1, []byte("Unknown tag"))
-		}
-	}
-}
 
 func handleTCPConn(conn *tagrpc.TCPConn) {
 	for {
@@ -166,56 +118,63 @@ func main() {
 		return
 	}
 
-	laddr, err := net.ResolveUDPAddr("udp", ":0")
-	if err != nil {
-		fmt.Println("ResolveUDPAddr:", err)
-		return
-	}
-
 	hubUDPAddr, err = net.ResolveUDPAddr("udp", "localhost:2000")
 	if err != nil {
 		fmt.Println("ResolveUDPAddr:", err)
 		return
 	}
 
-	conn, err := net.ListenUDP("udp", laddr)
+	udp, err := tag.NewUdp(":0")
 	if err != nil {
-		fmt.Println("ListenUDP:", err)
+		fmt.Println("NewUdp:", err)
 		return
 	}
 
-	defer conn.Close()
-	go handleUDPConn(conn)
+	defer udp.Close()
+	configureUdp(udp)
 
 	macBytes := [32]byte{}
 	copy(macBytes[:], []byte("AB:15:31:AA:93:26"))
 	deviceInfo := typedef.DeviceInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
 	info = deviceInfo
-	sendData(conn, info)
+	sendData(udp, info)
 }
 
-func sendData(conn *net.UDPConn, deviceInfo typedef.DeviceInfo) {
+func configureUdp(udp *tag.Udp) {
+	udp.Handle(1025, connectToHub)
+
+	go func() {
+		err := udp.ReadLoop()
+		if err != nil {
+			udp.Close()
+			fmt.Println("ReadLoop:", err)
+			return
+		}
+	}()
+}
+
+func connectToHub(u *tag.Udp, tag uint16, val []byte) error {
+	conn, err := InitConnect(string(val))
+	if err != nil {
+		err = fmt.Errorf("InitConnect: %s", err)
+		conn.Close()
+		return err
+	}
+
+	fmt.Println("Подключился к хабу")
+	go handleTCPConn(conn)
+	return nil
+}
+
+func sendData(udp *tag.Udp, deviceInfo typedef.DeviceInfo) {
 	for {
-		var reqBuf bytes.Buffer
 		telemetry, err := xbyte.StructToByte(deviceInfo)
 		if err != nil {
 			fmt.Println("StructToByte:", err)
 			continue
 		}
 
-		rw := tlv.NewReadWriter(&reqBuf)
-		err = rw.Write(uint16(3073), telemetry)
-		if err != nil {
-			fmt.Println("Tlv:", err)
-			continue
-		}
-
-		_, err = conn.WriteToUDP(reqBuf.Bytes(), hubUDPAddr)
-		if err != nil {
-			fmt.Println("WriteToUDP:", err)
-			continue
-		}
-
+		udp.Write(hubUDPAddr, uint16(3073), telemetry)
 		// fmt.Println(n)
 		time.Sleep(time.Second * 5)
 	}
