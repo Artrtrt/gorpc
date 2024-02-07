@@ -1,6 +1,7 @@
 package tag
 
 import (
+	"errors"
 	"fmt"
 	"net"
 )
@@ -31,36 +32,36 @@ func (u *Udp) Handle(tag uint16, handlefunc HandleFunc) {
 	u.handle[tag] = handlefunc
 }
 
-func (u *Udp) ReadLoop() error {
-	for {
-		addr, tag, val, err := u.Read()
-		if err != nil {
-			err = fmt.Errorf("tlv: %s", err)
-			return err
-		}
-
-		_, ok := u.handle[tag]
-		if !ok {
-			u.Write(addr, 1, []byte("Unknown tag"))
-			continue
-		}
-
-		if tag == 1 {
-			err = fmt.Errorf("remote err: %s", val)
-			return err
-		}
-
-		u.Raddr = addr
-		err = u.handle[tag](u, tag, val)
-		if err != nil {
-			err = fmt.Errorf("%s", err)
-			return err
-		}
+func (u *Udp) Execute(tag uint16, value []byte) (err error) {
+	if u.Raddr == nil {
+		return errors.New("remote addr is nil")
 	}
+
+	if tag == 1 {
+		err = fmt.Errorf("remote err: %s", value)
+		return
+	}
+
+	_, ok := u.handle[tag]
+	if !ok {
+		u.Write(u.Raddr, 1, []byte("unknown tag"))
+		return
+	}
+
+	err = u.handle[tag](u, tag, value)
+	if err != nil {
+		u.Write(u.Raddr, 1, []byte(err.Error()))
+		err = fmt.Errorf("%s", err)
+		return
+	}
+
+	return
 }
 
-func (u *Udp) Read() (addr *net.UDPAddr, tag uint16, val []byte, err error) {
-	return u.conn.read()
+func (u *Udp) Read() (tag uint16, val []byte, err error) {
+	addr, tag, val, err := u.conn.read()
+	u.Raddr = addr
+	return
 }
 
 func (u *Udp) Write(addr *net.UDPAddr, tag uint16, val []byte) (int, error) {

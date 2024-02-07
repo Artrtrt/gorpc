@@ -16,6 +16,8 @@ replace gopack/tagrpc => ../../gopack/tagrpc/
 
 replace rsautil => ../rsautil/
 
+replace tag => ../tag/
+
 require tcp v0.0.0-00010101000000-000000000000
 
 require (
@@ -26,5 +28,6 @@ require (
 	gopack/tlv v0.0.0-00010101000000-000000000000 // indirect
 	gopack/xbyte v0.0.0-00010101000000-000000000000 // indirect
 	rsautil v0.0.0-00010101000000-000000000000 // indirect
+	tag v0.0.0-00010101000000-000000000000 // indirect
 	typedef v0.0.0-00010101000000-000000000000 // indirect
 )

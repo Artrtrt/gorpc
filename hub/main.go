@@ -206,7 +206,7 @@ func main() {
 	}
 
 	defer udp.Close()
-	configureUdp(udp)
+	go configureUdp(udp)
 
 	fmt.Println("Слухает")
 	go httpServer()
@@ -230,14 +230,19 @@ func configureUdp(udp *tag.Udp) {
 	udp.Handle(2049, receiveServerInfo)
 	udp.Handle(3073, receiveDeviceInfo)
 
-	go func() {
-		err := udp.ReadLoop()
+	for {
+		tag, val, err := udp.Read()
 		if err != nil {
-			udp.Close()
-			fmt.Println("ReadLoop:", err)
-			return
+			fmt.Println("udp read:", err)
+			continue
 		}
-	}()
+
+		err = udp.Execute(tag, val)
+		if err != nil {
+			fmt.Println("udp execute:", err)
+			continue
+		}
+	}
 }
 
 func receiveServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
@@ -278,7 +283,6 @@ func receiveDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 		data.DeviceInfo = deviceInfo
 		deviceStorage[deviceInfo.Mac] = data
 		if data.ToConnTCP {
-			fmt.Println(u.Raddr)
 			_, err = u.Write(u.Raddr, 1025, []byte(addr))
 			if err != nil {
 				err = fmt.Errorf("UdpWrite: %s", err)

@@ -131,7 +131,7 @@ func main() {
 	}
 
 	defer udp.Close()
-	configureUdp(udp)
+	go configureUdp(udp)
 
 	macBytes := [32]byte{}
 	copy(macBytes[:], []byte("AB:15:31:AA:93:26"))
@@ -142,15 +142,19 @@ func main() {
 
 func configureUdp(udp *tag.Udp) {
 	udp.Handle(1025, connectToHub)
-
-	go func() {
-		err := udp.ReadLoop()
+	for {
+		tag, val, err := udp.Read()
 		if err != nil {
-			udp.Close()
-			fmt.Println("ReadLoop:", err)
-			return
+			fmt.Println("udp read:", err)
+			continue
 		}
-	}()
+
+		err = udp.Execute(tag, val)
+		if err != nil {
+			fmt.Println("udp execute:", err)
+			continue
+		}
+	}
 }
 
 func connectToHub(u *tag.Udp, tag uint16, val []byte) error {
@@ -174,7 +178,11 @@ func sendData(udp *tag.Udp, deviceInfo typedef.DeviceInfo) {
 			continue
 		}
 
-		udp.Write(hubUDPAddr, uint16(3073), telemetry)
+		_, err = udp.Write(hubUDPAddr, uint16(3073), telemetry)
+		if err != nil {
+			fmt.Println("UdpWrite:", err)
+			continue
+		}
 		// fmt.Println(n)
 		time.Sleep(time.Second * 5)
 	}

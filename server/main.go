@@ -1,17 +1,16 @@
 package main
 
 import (
-	"bytes"
 	"crypto/rsa"
 	"encoding/json"
 	"fmt"
 	"gopack/jsonrpc"
 	"gopack/tagrpc"
-	"gopack/tlv"
 	"gopack/xbyte"
 	"net"
 	"net/http"
 	"rsautil"
+	"tag"
 	"tcp"
 	"time"
 	"typedef"
@@ -160,32 +159,25 @@ func main() {
 		return
 	}
 
-	laddr, err := net.ResolveUDPAddr("udp", ":0")
-	if err != nil {
-		fmt.Println("ResolveUDPAddr:", err)
-		return
-	}
-
+	defer tcpLr.Close()
+	go acceptTcp(tcpLr)
 	hubUDPAddr, err = net.ResolveUDPAddr("udp", "localhost:2000")
 	if err != nil {
 		fmt.Println("ResolveUDPAddr:", err)
 		return
 	}
 
-	conn, err := net.ListenUDP("udp", laddr)
+	udp, err := tag.NewUdp(":0")
 	if err != nil {
-		fmt.Println("ListenUDP:", err)
+		fmt.Println("NewUdp:", err)
 		return
 	}
 
-	defer tcpLr.Close()
-
+	go configureUdp(udp)
 	var byteAddr [32]byte
 	copy(byteAddr[:], []byte(addr))
 	control := typedef.NewServerInfoControl(byteAddr, 1000)
-	go sendData(conn, control)
-
-	acceptTcp(tcpLr)
+	sendData(udp, control.ServerInfo)
 }
 
 func acceptTcp(lr *tagrpc.TCPListener) {
@@ -239,30 +231,38 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 	}
 }
 
-func sendData(conn *net.UDPConn, control *typedef.ServerInfoControl) {
+func sendData(udp *tag.Udp, info typedef.ServerInfo) {
 	for {
-		var reqBuf bytes.Buffer
-		info, err := xbyte.StructToByte(control.ServerInfo)
+		info, err := xbyte.StructToByte(info)
 		if err != nil {
 			fmt.Println("StructToByte:", err)
 			continue
 		}
 
-		rw := tlv.NewReadWriter(&reqBuf)
-		err = rw.Write(uint16(2049), info)
+		_, err = udp.Write(hubUDPAddr, uint16(2049), info)
 		if err != nil {
-			fmt.Println("Tlv:", err)
-			continue
-		}
-
-		_, err = conn.WriteToUDP(reqBuf.Bytes(), hubUDPAddr)
-		if err != nil {
-			fmt.Println("WriteToUDP:", err)
+			fmt.Println("UdpWrite:", err)
 			continue
 		}
 
 		// fmt.Println(n)
 		time.Sleep(time.Second * 5)
+	}
+}
+
+func configureUdp(udp *tag.Udp) {
+	for {
+		tag, val, err := udp.Read()
+		if err != nil {
+			fmt.Println("udp read:", err)
+			continue
+		}
+
+		err = udp.Execute(tag, val)
+		if err != nil {
+			fmt.Println("udp execute:", err)
+			continue
+		}
 	}
 }
 
