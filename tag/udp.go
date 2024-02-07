@@ -6,6 +6,7 @@ import (
 )
 
 type Udp struct {
+	Raddr  *net.UDPAddr
 	conn   *TagConn
 	handle map[uint16]HandleFunc
 }
@@ -13,13 +14,17 @@ type Udp struct {
 type HandleFunc func(*Udp, uint16, []byte) error
 
 func NewUdp(addr string) (*Udp, error) {
-	conn, err := ListenUDP(addr)
+	conn, err := listenUDP(addr)
 	if err != nil {
-		err = fmt.Errorf("NewConn: %s", err)
+		err = fmt.Errorf("ListenUDP: %s", err)
 		return nil, err
 	}
 
-	return &Udp{conn: conn, handle: make(map[uint16]HandleFunc)}, nil
+	return &Udp{
+			Raddr:  nil,
+			conn:   conn,
+			handle: make(map[uint16]HandleFunc)},
+		nil
 }
 
 func (u *Udp) Handle(tag uint16, handlefunc HandleFunc) {
@@ -45,6 +50,7 @@ func (u *Udp) ReadLoop() error {
 			return err
 		}
 
+		u.Raddr = addr
 		err = u.handle[tag](u, tag, val)
 		if err != nil {
 			err = fmt.Errorf("%s", err)
@@ -54,13 +60,13 @@ func (u *Udp) ReadLoop() error {
 }
 
 func (u *Udp) Read() (addr *net.UDPAddr, tag uint16, val []byte, err error) {
-	return u.conn.Read()
+	return u.conn.read()
 }
 
 func (u *Udp) Write(addr *net.UDPAddr, tag uint16, val []byte) (int, error) {
-	return u.conn.Write(addr, tag, val)
+	return u.conn.write(addr, tag, val)
 }
 
 func (u *Udp) Close() error {
-	return u.conn.Close()
+	return u.conn.close()
 }

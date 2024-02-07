@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/rsa"
 	"database/sql"
 	"fmt"
@@ -11,11 +10,11 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"tag"
 	"tcp"
 	"time"
 
 	"gopack/tagrpc"
-	"gopack/tlv"
 	"gopack/xbyte"
 	"rsautil"
 	"typedef"
@@ -26,7 +25,7 @@ import (
 type DeviceStorage struct {
 	DeviceInfo typedef.DeviceInfo
 	Time       int64
-	Sent       bool
+	SentToDB   bool
 	ToConnTCP  bool
 }
 
@@ -79,104 +78,6 @@ func httpServer() {
 		}
 	})
 	http.ListenAndServe(httpAddr, nil)
-}
-
-func handleUDPConn(conn *net.UDPConn) {
-	var buf bytes.Buffer
-	rw := tlv.NewReadWriter(&buf)
-	for {
-		data := make([]byte, 1024)
-		_, raddr, err := conn.ReadFromUDP(data)
-		if err != nil {
-			fmt.Println("ReadFromUDP", err)
-			continue
-		}
-
-		_, err = buf.Write(data)
-		if err != nil {
-			fmt.Println("Write", err)
-			continue
-		}
-		tag, val, err := rw.Read()
-		if err != nil {
-			fmt.Println("Tlv", err)
-			continue
-		}
-
-		buf.Reset() // Иначе буфер остается заполнен нулями
-		switch tag {
-		case 1:
-			fmt.Printf("Ошибка %s. От устройства %s", string(val), raddr.String())
-		case 2049:
-			serverInfo := typedef.ServerInfo{}
-			err = xbyte.ByteToStruct(val, &serverInfo)
-			if err != nil {
-				fmt.Println("ByteToStruct", err)
-				continue
-			}
-
-			_, ok := serverStorage[serverInfo.Addr]
-			if ok {
-				data := serverStorage[serverInfo.Addr]
-				data.ConnectionCount = serverInfo.ConnectionCount
-				data.ConnectionLimit = serverInfo.ConnectionLimit
-			} else {
-				serverStorage[serverInfo.Addr] = typedef.ServerInfo{
-					Addr: serverInfo.Addr, ConnectionCount: serverInfo.ConnectionCount, ConnectionLimit: serverInfo.ConnectionLimit,
-				}
-			}
-		case 3073:
-			deviceInfo := typedef.DeviceInfo{}
-			err = xbyte.ByteToStruct(val, &deviceInfo)
-			if err != nil {
-				fmt.Println("ByteToStruct", err)
-				continue
-			}
-
-			time := time.Now().Unix()
-			_, ok := deviceStorage[deviceInfo.Mac]
-			if ok {
-				data := deviceStorage[deviceInfo.Mac]
-				data.Time = time
-				data.DeviceInfo = deviceInfo
-				deviceStorage[deviceInfo.Mac] = data
-				if data.ToConnTCP {
-					err = rw.Write(1025, []byte(addr))
-					if err != nil {
-						fmt.Println("Tlv", err)
-						continue
-					}
-
-					_, err = conn.WriteToUDP(buf.Bytes(), raddr)
-					if err != nil {
-						fmt.Println("Conn write", err)
-						continue
-					}
-
-					buf.Reset()
-				}
-				// fmt.Printf("Данные о роутере %s обновились\n", string(deviceInfo.Mac[:]))
-			} else {
-				deviceStorage[deviceInfo.Mac] = DeviceStorage{
-					deviceInfo, time, false, false,
-				}
-				// fmt.Printf("Роутер %s добавлен\n", deviceInfo.Mac)
-			}
-		default:
-			err = rw.Write(1, []byte("Unknown tag"))
-			if err != nil {
-				fmt.Println("Tlv", err)
-				continue
-			}
-
-			_, err = conn.WriteToUDP(buf.Bytes(), raddr)
-			if err != nil {
-				fmt.Println("Conn write", err)
-				return
-			}
-			buf.Reset()
-		}
-	}
 }
 
 func handleTCPConn(conn *tagrpc.TCPConn) {
@@ -249,7 +150,7 @@ func handleTCPConn(conn *tagrpc.TCPConn) {
 
 func lessBusyServer(storage map[[32]byte]typedef.ServerInfo) (serverAddr [32]byte, err error) {
 	if len(storage) == 0 {
-		err = fmt.Errorf("No servers")
+		err = fmt.Errorf("%s", "No servers")
 		return
 	}
 
@@ -297,21 +198,17 @@ func main() {
 	}
 
 	defer tcpLr.Close()
-	addr, err := net.ResolveUDPAddr("udp", "localhost:2000")
+
+	udp, err := tag.NewUdp("localhost:2000")
 	if err != nil {
-		fmt.Println("ResolveUDPAddr", err)
+		fmt.Println("NewUdp:", err)
 		return
 	}
 
-	udpListener, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		fmt.Println("ListenUDP", err)
-		return
-	}
+	defer udp.Close()
+	configureUdp(udp)
 
-	defer udpListener.Close()
 	fmt.Println("Слухает")
-
 	go httpServer()
 
 	// go func() {
@@ -326,9 +223,77 @@ func main() {
 	// 	}
 	// }()
 
-	go acceptTcp(tcpLr)
+	acceptTcp(tcpLr)
+}
 
-	handleUDPConn(udpListener)
+func configureUdp(udp *tag.Udp) {
+	udp.Handle(2049, receiveServerInfo)
+	udp.Handle(3073, receiveDeviceInfo)
+
+	go func() {
+		err := udp.ReadLoop()
+		if err != nil {
+			udp.Close()
+			fmt.Println("ReadLoop:", err)
+			return
+		}
+	}()
+}
+
+func receiveServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
+	serverInfo := typedef.ServerInfo{}
+	err = xbyte.ByteToStruct(val, &serverInfo)
+	if err != nil {
+		err = fmt.Errorf("ByteToStruct: %s", err)
+		return
+	}
+
+	_, ok := serverStorage[serverInfo.Addr]
+	if ok {
+		data := serverStorage[serverInfo.Addr]
+		data.ConnectionCount = serverInfo.ConnectionCount
+		data.ConnectionLimit = serverInfo.ConnectionLimit
+	} else {
+		serverStorage[serverInfo.Addr] = typedef.ServerInfo{
+			Addr: serverInfo.Addr, ConnectionCount: serverInfo.ConnectionCount, ConnectionLimit: serverInfo.ConnectionLimit,
+		}
+	}
+
+	return
+}
+
+func receiveDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
+	deviceInfo := typedef.DeviceInfo{}
+	err = xbyte.ByteToStruct(val, &deviceInfo)
+	if err != nil {
+		err = fmt.Errorf("ByteToStruct: %s", err)
+		return
+	}
+
+	time := time.Now().Unix()
+	_, ok := deviceStorage[deviceInfo.Mac]
+	if ok {
+		data := deviceStorage[deviceInfo.Mac]
+		data.Time = time
+		data.DeviceInfo = deviceInfo
+		deviceStorage[deviceInfo.Mac] = data
+		if data.ToConnTCP {
+			fmt.Println(u.Raddr)
+			_, err = u.Write(u.Raddr, 1025, []byte(addr))
+			if err != nil {
+				err = fmt.Errorf("UdpWrite: %s", err)
+				return
+			}
+		}
+		// fmt.Printf("Данные о роутере %s обновились\n", string(deviceInfo.Mac[:]))
+	} else {
+		deviceStorage[deviceInfo.Mac] = DeviceStorage{
+			deviceInfo, time, false, false,
+		}
+		// fmt.Printf("Роутер %s добавлен\n", deviceInfo.Mac)
+	}
+
+	return
 }
 
 func acceptTcp(lr *tagrpc.TCPListener) {
@@ -393,7 +358,7 @@ func toSql(dbChan chan bool) (err error) {
 	}()
 
 	for key, value := range deviceStorage {
-		if value.Sent {
+		if value.SentToDB {
 			continue
 		}
 
@@ -402,7 +367,7 @@ func toSql(dbChan chan bool) (err error) {
 		))
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-				value.Sent = true
+				value.SentToDB = true
 				deviceStorage[key] = value
 				continue
 			}
@@ -411,7 +376,7 @@ func toSql(dbChan chan bool) (err error) {
 			return err
 		}
 
-		value.Sent = true
+		value.SentToDB = true
 		deviceStorage[key] = value
 	}
 	// fmt.Println(storage)

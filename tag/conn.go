@@ -11,7 +11,7 @@ type TagConn struct {
 	conn *net.UDPConn
 }
 
-func ListenUDP(addr string) (*TagConn, error) {
+func listenUDP(addr string) (*TagConn, error) {
 	laddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		err = fmt.Errorf("ResolveUDPAddr: %s", err)
@@ -27,7 +27,7 @@ func ListenUDP(addr string) (*TagConn, error) {
 	return &TagConn{conn: conn}, nil
 }
 
-func (t *TagConn) Read() (raddr *net.UDPAddr, tag uint16, val []byte, err error) {
+func (t *TagConn) read() (raddr *net.UDPAddr, tag uint16, val []byte, err error) {
 	data := make([]byte, 1024)
 	_, raddr, err = t.conn.ReadFromUDP(data)
 	if err != nil {
@@ -47,7 +47,7 @@ func (t *TagConn) Read() (raddr *net.UDPAddr, tag uint16, val []byte, err error)
 	return raddr, tag, val, err
 }
 
-func (t *TagConn) Write(raddr *net.UDPAddr, tag uint16, val []byte) (n int, err error) {
+func (t *TagConn) write(raddr *net.UDPAddr, tag uint16, val []byte) (n int, err error) {
 	var buf bytes.Buffer
 	rw := tlv.NewReadWriter(&buf)
 	err = rw.Write(tag, val)
@@ -59,6 +59,6 @@ func (t *TagConn) Write(raddr *net.UDPAddr, tag uint16, val []byte) (n int, err 
 	return t.conn.WriteToUDP(buf.Bytes(), raddr)
 }
 
-func (t *TagConn) Close() error {
+func (t *TagConn) close() error {
 	return t.conn.Close()
 }
