@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rsa"
 	"database/sql"
 	"errors"
@@ -35,13 +36,15 @@ type ServerStorage struct {
 }
 
 var (
-	err           error
-	privateKey    *rsa.PrivateKey
-	publicKey     *rsa.PublicKey
-	addr          string = "localhost:8080"
-	httpAddr      string = ":8081"
-	deviceStorage        = make(map[[32]byte]DeviceStorage)
-	serverStorage        = make(map[[32]byte]typedef.ServerInfo)
+	err        error
+	privateKey *rsa.PrivateKey
+	publicKey  *rsa.PublicKey
+
+	addrStr  string = "localhost:8080"
+	httpAddr string = ":8081"
+
+	deviceStorage = make(map[[32]byte]DeviceStorage)
+	serverStorage = make(map[[32]byte]typedef.ServerInfo)
 )
 
 func httpServer() {
@@ -103,7 +106,18 @@ func main() {
 		os.Exit(1)
 	}()
 
-	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+	udp, err := tag.NewUdp("localhost:2000")
+	if err != nil {
+		fmt.Println("NewUdp:", err)
+		return
+	}
+
+	defer udp.Close()
+	go configureUdp(udp)
+	go httpServer()
+	fmt.Println("Слухает")
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp", addrStr)
 	if err != nil {
 		fmt.Println("ResolveTCPAddr", err)
 		return
@@ -117,17 +131,7 @@ func main() {
 
 	defer tcpLr.Close()
 	configureTcp(tcpLr)
-
-	udp, err := tag.NewUdp("localhost:2000")
-	if err != nil {
-		fmt.Println("NewUdp:", err)
-		return
-	}
-
-	defer udp.Close()
-	go configureUdp(udp)
-	fmt.Println("Слухает")
-
+	acceptTcp(tcpLr)
 	// go func() {
 	// 	for {
 	// 		err := toSql(dbChan)
@@ -139,9 +143,6 @@ func main() {
 	// 		time.Sleep(time.Second * 10)
 	// 	}
 	// }()
-
-	go httpServer()
-	acceptTcp(tcpLr)
 }
 
 // TCP
@@ -175,9 +176,12 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 
 func configureTcp(lr *tagrpc.TCPListener) {
 	lr.HandleFunc(1, remoteErr)
-	lr.HandleFunc(2050, sendClientHttpAddr)
-	lr.HandleFunc(2051, closeDeviceConnection)
 	lr.HandleFunc(3075, sendServerAddr)
+}
+
+func configureTcpForServer(conn *tagrpc.TCPConn) {
+	conn.HandleFunc(2050, sendClientHttpAddr)
+	conn.HandleFunc(2051, closeDeviceConnection)
 }
 
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -202,7 +206,7 @@ func closeDeviceConnection(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 }
 
 func sendServerAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	deviceInfo := typedef.DeviceInfo{}
+	deviceInfo := typedef.DeviceInfo{} // Проверяет подключенное устройство
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
 		err = fmt.Errorf("ByteToStruct: %s", err)
@@ -217,7 +221,7 @@ func sendServerAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 
 	info.ToConnTCP = false
 	deviceStorage[deviceInfo.Mac] = info
-	addr, err := lessBusyServer(serverStorage)
+	addr, err := lessBusyServer(serverStorage) // Ищет наименее загруженный сервер
 	if err != nil {
 		n.Write(1, []byte(fmt.Sprintf("lessBusyServer %s", err)))
 		err = fmt.Errorf("lessBusyServer: %s", err)
@@ -229,7 +233,37 @@ func sendServerAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	err = n.Write(1026, addr[:])
+	trimAddr := bytes.TrimRightFunc(addr[:], func(r rune) bool { // Отправляет информацию об устройстве серверу
+		return r == 0
+	})
+
+	serverAddr, err := net.ResolveTCPAddr("tcp", string(trimAddr))
+	if err != nil {
+		err = fmt.Errorf("ResolveTCPAddr: %s", err)
+		return
+	}
+
+	serverConn, err := tagrpc.DialTCP(nil, serverAddr)
+	if err != nil {
+		err = fmt.Errorf("tagrpc DialTCP: %s", err)
+		return
+	}
+
+	serverPublicKey, err := tcp.RsaKeyExchange(serverConn, publicKey)
+	if err != nil {
+		fmt.Println("RsaKeyExchange:", err)
+		return
+	}
+
+	serverConn.Codec = tagrpc.NewRsaCodec(privateKey, serverPublicKey)
+	configureTcpForServer(serverConn)
+	serverConn.Write(1027, val)
+	if err != nil {
+		err = fmt.Errorf("tagrpc Write: %s", err)
+		return
+	}
+
+	err = n.Write(1026, addr[:]) // Отправляет адрес сервера на устройства
 	if err != nil {
 		err = fmt.Errorf("tagrpc Write: %s", err)
 		return
@@ -311,7 +345,7 @@ func receiveDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 		data.DeviceInfo = deviceInfo
 		deviceStorage[deviceInfo.Mac] = data
 		if data.ToConnTCP {
-			_, err = u.Write(u.Raddr, 1025, []byte(addr))
+			_, err = u.Write(u.Raddr, 1025, []byte(addrStr))
 			if err != nil {
 				err = fmt.Errorf("UdpWrite: %s", err)
 				return

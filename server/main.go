@@ -45,46 +45,6 @@ func handleRPC(w http.ResponseWriter, r *http.Request) {
 	w.Write(byteResponse)
 }
 
-func handleTCP(conn *tagrpc.TCPConn) {
-	for {
-		tag, val, err := conn.Read()
-		if err != nil {
-			return
-		}
-
-		switch tag {
-		case 1:
-			fmt.Println("Hub err response:", string(val))
-		case 1027:
-			var deviceInfo typedef.DeviceInfo
-			err = xbyte.ByteToStruct(val, &deviceInfo)
-			if err != nil {
-				fmt.Println("ByteToStruct", err)
-				continue
-			}
-
-			_, ok := wantToConnectStorage[deviceInfo.Mac]
-			if ok {
-				continue
-			}
-
-			wantToConnectStorage[deviceInfo.Mac] = deviceInfo
-		case 3075:
-			var deviceInfo typedef.DeviceInfo
-			err = xbyte.ByteToStruct(val, &deviceInfo)
-			if err != nil {
-				fmt.Println("ByteToStruct", err)
-				continue
-			}
-
-			_, ok := wantToConnectStorage[deviceInfo.Mac]
-			if ok {
-				continue
-			}
-		}
-	}
-}
-
 func httpServer(port int, raddr string) {
 	// ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	// if err != nil {
