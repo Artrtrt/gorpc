@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rsa"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -80,89 +81,6 @@ func httpServer() {
 	http.ListenAndServe(httpAddr, nil)
 }
 
-func handleTCPConn(conn *tagrpc.TCPConn) {
-	for {
-		tag, val, err := conn.Read()
-		if err != nil {
-			return
-		}
-
-		switch tag {
-		case 1:
-			fmt.Printf("Device err response: %s", string(val))
-		case 3075:
-			deviceInfo := typedef.DeviceInfo{}
-			err = xbyte.ByteToStruct(val, &deviceInfo)
-			if err != nil {
-				fmt.Println("ByteToStruct", err)
-				continue
-			}
-
-			info, ok := deviceStorage[deviceInfo.Mac]
-			if !ok {
-				conn.Write(1, []byte("Unknown device"))
-				continue
-			}
-
-			info.ToConnTCP = false
-			deviceStorage[deviceInfo.Mac] = info
-			addr, err := lessBusyServer(serverStorage)
-			if err != nil {
-				conn.Write(1, []byte(fmt.Sprintf("lessBusyServer %s", err)))
-				fmt.Println("lessBusyServer", err)
-				continue
-			}
-
-			if addr[0] == 0 {
-				fmt.Println("Wrong server addr")
-				continue
-			}
-
-			err = conn.Write(1026, addr[:])
-			if err != nil {
-				fmt.Println("Conn.Write", err)
-				continue
-			}
-
-			err = conn.Close()
-			if err != nil {
-				fmt.Println("Conn.Close", err)
-				return
-			}
-
-			return
-		case 2050:
-			deviceInfo := typedef.DeviceInfo{}
-			err = xbyte.ByteToStruct(val, &deviceInfo)
-			if err != nil {
-				fmt.Println("ByteToStruct", err)
-				continue
-			}
-
-			fmt.Println("Сообщить клиенту адрес куда подключаться")
-		case 2051:
-
-		default:
-			conn.Write(1, []byte("Unknown tag"))
-		}
-	}
-}
-
-func lessBusyServer(storage map[[32]byte]typedef.ServerInfo) (serverAddr [32]byte, err error) {
-	if len(storage) == 0 {
-		err = fmt.Errorf("%s", "No servers")
-		return
-	}
-
-	maxFreeConnections := 0
-	for addr, server := range storage {
-		if (server.ConnectionLimit - server.ConnectionCount) > uint32(maxFreeConnections) {
-			serverAddr = addr
-		}
-	}
-	return
-}
-
 func main() {
 	publicKey, err = rsautil.PemToPublicKey("public.pem")
 	if err != nil {
@@ -198,6 +116,7 @@ func main() {
 	}
 
 	defer tcpLr.Close()
+	go configureTcp(tcpLr)
 
 	udp, err := tag.NewUdp("localhost:2000")
 	if err != nil {
@@ -207,9 +126,7 @@ func main() {
 
 	defer udp.Close()
 	go configureUdp(udp)
-
 	fmt.Println("Слухает")
-	go httpServer()
 
 	// go func() {
 	// 	for {
@@ -223,9 +140,126 @@ func main() {
 	// 	}
 	// }()
 
+	go httpServer()
 	acceptTcp(tcpLr)
 }
 
+// TCP
+func acceptTcp(lr *tagrpc.TCPListener) {
+	for {
+		conn, err := lr.AcceptTCP()
+		if err != nil {
+			fmt.Println("AcceptTCP", err)
+			continue
+		}
+		go func() {
+			clientPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
+			if err != nil {
+				conn.Close()
+				fmt.Println("RsaKeyExchange", err)
+				return
+			}
+
+			conn.Codec = tagrpc.NewRsaCodec(privateKey, clientPublicKey)
+			fmt.Println("Подключился " + conn.Tcp.RemoteAddr().String())
+			for {
+				err = conn.Update(100000000000000)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+			}
+		}()
+	}
+}
+
+func configureTcp(lr *tagrpc.TCPListener) {
+	lr.HandleFunc(1, remoteErr)
+	lr.HandleFunc(2050, sendClientHttpAddr)
+	lr.HandleFunc(2051, closeDeviceConnection)
+	lr.HandleFunc(3075, sendServerAddr)
+}
+
+func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	return errors.New(fmt.Sprint("remoteErr:", string(val)))
+}
+
+func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	deviceInfo := typedef.DeviceInfo{}
+	err = xbyte.ByteToStruct(val, &deviceInfo)
+	if err != nil {
+		err = fmt.Errorf("ByteToStruct: %s", err)
+		return
+	}
+
+	fmt.Println("Сообщить клиенту адрес куда подключаться")
+	return
+}
+
+func closeDeviceConnection(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	fmt.Println("hello")
+	return
+}
+
+func sendServerAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	deviceInfo := typedef.DeviceInfo{}
+	err = xbyte.ByteToStruct(val, &deviceInfo)
+	if err != nil {
+		err = fmt.Errorf("ByteToStruct: %s", err)
+		return
+	}
+
+	info, ok := deviceStorage[deviceInfo.Mac]
+	if !ok {
+		n.Write(1, []byte("Unknown device"))
+		return
+	}
+
+	info.ToConnTCP = false
+	deviceStorage[deviceInfo.Mac] = info
+	addr, err := lessBusyServer(serverStorage)
+	if err != nil {
+		n.Write(1, []byte(fmt.Sprintf("lessBusyServer %s", err)))
+		err = fmt.Errorf("lessBusyServer: %s", err)
+		return
+	}
+
+	if addr[0] == 0 {
+		err = fmt.Errorf("wrong server addr")
+		return
+	}
+
+	err = n.Write(1026, addr[:])
+	if err != nil {
+		err = fmt.Errorf("tagrpc Write: %s", err)
+		return
+	}
+
+	err = n.Close()
+	if err != nil {
+		fmt.Println("tagrpc Close", err)
+		return
+	}
+
+	return
+}
+
+func lessBusyServer(storage map[[32]byte]typedef.ServerInfo) (serverAddr [32]byte, err error) {
+	if len(storage) == 0 {
+		err = fmt.Errorf("%s", "No servers")
+		return
+	}
+
+	maxFreeConnections := 0
+	for addr, server := range storage {
+		if (server.ConnectionLimit - server.ConnectionCount) > uint32(maxFreeConnections) {
+			serverAddr = addr
+		}
+	}
+	return
+}
+
+// UDP
 func configureUdp(udp *tag.Udp) {
 	udp.Handle(2049, receiveServerInfo)
 	udp.Handle(3073, receiveDeviceInfo)
@@ -300,29 +334,7 @@ func receiveDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 	return
 }
 
-func acceptTcp(lr *tagrpc.TCPListener) {
-	for {
-		tcpconn, err := lr.AcceptTCP()
-		if err != nil {
-			fmt.Println("AcceptTCP", err)
-			continue
-		}
-		go func() {
-			clientPublicKey, err := tcp.RsaKeyExchange(tcpconn, publicKey)
-			if err != nil {
-				tcpconn.Close()
-				fmt.Println("RsaKeyExchange", err)
-				return
-			}
-
-			tcpconn.Codec = tagrpc.NewRsaCodec(privateKey, clientPublicKey)
-			defer tcpconn.Close()
-			fmt.Println("Подключился " + tcpconn.Tcp.RemoteAddr().String())
-			handleTCPConn(tcpconn)
-		}()
-	}
-}
-
+// -----------------------------
 func deviceByMac() {
 	db, err := sql.Open("sqlite3", "test.db")
 	if err != nil {
