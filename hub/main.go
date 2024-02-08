@@ -116,7 +116,7 @@ func main() {
 	}
 
 	defer tcpLr.Close()
-	go configureTcp(tcpLr)
+	configureTcp(tcpLr)
 
 	udp, err := tag.NewUdp("localhost:2000")
 	if err != nil {
@@ -152,10 +152,10 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			fmt.Println("AcceptTCP", err)
 			continue
 		}
+
 		go func() {
 			clientPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
 			if err != nil {
-				conn.Close()
 				fmt.Println("RsaKeyExchange", err)
 				return
 			}

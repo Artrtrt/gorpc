@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rsa"
+	"errors"
 	"fmt"
 	"gopack/tagrpc"
 	"gopack/xbyte"
@@ -23,47 +24,6 @@ var (
 
 	hubUDPAddr *net.UDPAddr
 )
-
-func handleTCPConn(conn *tagrpc.TCPConn) {
-	for {
-		tag, val, err := conn.Read()
-		if err != nil {
-			conn.Close()
-			return
-		}
-
-		switch tag {
-		case 1:
-			fmt.Println("Hub err response:", string(val))
-		case 1026:
-			val = bytes.TrimRightFunc(val, func(r rune) bool {
-				return r == 0
-			})
-
-			conn, err := InitConnect(string(val))
-			if err != nil {
-				fmt.Println("InitConnect", err)
-				conn.Close()
-				continue
-			}
-
-			fmt.Printf("Подключился к серверу %s\n", conn.Tcp.RemoteAddr())
-			go func() { // Дальше будет доделываться(это прием инфы от сервера)
-				for {
-					tag, val, err := conn.Read()
-					if err != nil {
-						fmt.Println("Conn read:", err)
-						return
-					}
-
-					fmt.Println(tag, val)
-				}
-			}()
-		default:
-			conn.Write(1, []byte("Unknown tag"))
-		}
-	}
-}
 
 func InitConnect(addr string) (conn *tagrpc.TCPConn, err error) {
 	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
@@ -140,6 +100,43 @@ func main() {
 	sendData(udp, info)
 }
 
+// TCP
+func configureTcpForHub(conn *tagrpc.TCPConn) {
+	conn.HandleFunc(1, remoteErr)
+	conn.HandleFunc(1026, connectToServer)
+}
+
+func configureTcpForServer(conn *tagrpc.TCPConn) {
+	conn.HandleFunc(1, remoteErr)
+}
+
+func connectToServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	val = bytes.TrimRightFunc(val, func(r rune) bool {
+		return r == 0
+	})
+
+	conn, err := InitConnect(string(val))
+	if err != nil {
+		fmt.Println("InitConnect", err)
+		return
+	}
+
+	configureTcpForServer(conn)
+	fmt.Printf("Подключился к серверу %s\n", conn.Tcp.RemoteAddr())
+	for {
+		err = conn.Update(100000000000000)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+	}
+}
+
+func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	return errors.New(fmt.Sprint("remoteErr:", string(val)))
+}
+
+// UDP
 func configureUdp(udp *tag.Udp) {
 	udp.Handle(1025, connectToHub)
 	for {
@@ -157,17 +154,25 @@ func configureUdp(udp *tag.Udp) {
 	}
 }
 
-func connectToHub(u *tag.Udp, tag uint16, val []byte) error {
+func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
 	conn, err := InitConnect(string(val))
 	if err != nil {
 		err = fmt.Errorf("InitConnect: %s", err)
-		conn.Close()
-		return err
+		return
 	}
 
+	configureTcpForHub(conn)
 	fmt.Println("Подключился к хабу")
-	go handleTCPConn(conn)
-	return nil
+	go func() {
+		for {
+			err = conn.Update(100000000000000)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+		}
+	}()
+	return
 }
 
 func sendData(udp *tag.Udp, deviceInfo typedef.DeviceInfo) {

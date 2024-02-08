@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"gopack/jsonrpc"
 	"gopack/tagrpc"
@@ -160,6 +161,7 @@ func main() {
 	}
 
 	defer tcpLr.Close()
+	configureTcp(tcpLr)
 	go acceptTcp(tcpLr)
 	hubUDPAddr, err = net.ResolveUDPAddr("udp", "localhost:2000")
 	if err != nil {
@@ -180,6 +182,7 @@ func main() {
 	sendData(udp, control.ServerInfo)
 }
 
+// TCP
 func acceptTcp(lr *tagrpc.TCPListener) {
 	for {
 		conn, err := lr.AcceptTCP()
@@ -190,11 +193,6 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 
 		go func() {
 			raddr := conn.Tcp.RemoteAddr().String()
-			defer func() {
-				fmt.Printf("Соединение с %s разорвано\n", raddr)
-				conn.Close()
-			}()
-
 			clientPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
 			if err != nil {
 				fmt.Println("RsaKeyExchange:", err)
@@ -215,19 +213,76 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			go httpServer(port, raddr)
 
 			for {
-				tag, val, err := conn.Read()
+				err = conn.Update(100000000000000)
 				if err != nil {
-					fmt.Println("Conn read:", err)
+					fmt.Println(err)
 					return
 				}
-				// var deviceInfo DeviceInfo
-				// xbyte.ByteToStruct(val, &deviceInfo)
-				// fmt.Println(string(deviceInfo.Mac[:]))
-				// fmt.Println(deviceInfo.Uptime)
-
-				fmt.Println(tag, val)
 			}
 		}()
+	}
+}
+
+func configureTcp(lr *tagrpc.TCPListener) {
+	lr.HandleFunc(1, remoteErr)
+	lr.HandleFunc(1027, receiveDeviceInfo)
+	lr.HandleFunc(3075, acceptDevice)
+}
+
+func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	return errors.New(fmt.Sprint("remoteErr:", string(val)))
+}
+
+func receiveDeviceInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	var deviceInfo typedef.DeviceInfo
+	err = xbyte.ByteToStruct(val, &deviceInfo)
+	if err != nil {
+		err = fmt.Errorf("ByteToStruct: %s", err)
+		return
+	}
+
+	_, ok := wantToConnectStorage[deviceInfo.Mac]
+	if ok {
+		return
+	}
+
+	wantToConnectStorage[deviceInfo.Mac] = deviceInfo
+	return
+}
+
+func acceptDevice(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	var deviceInfo typedef.DeviceInfo
+	err = xbyte.ByteToStruct(val, &deviceInfo)
+	if err != nil {
+		err = fmt.Errorf("ByteToStruct: %s", err)
+		return
+	}
+
+	_, ok := wantToConnectStorage[deviceInfo.Mac]
+	if !ok {
+		fmt.Println("Такого нет")
+		n.Close()
+		return
+	}
+
+	fmt.Println("Все норм")
+	return
+}
+
+// UDP
+func configureUdp(udp *tag.Udp) {
+	for {
+		tag, val, err := udp.Read()
+		if err != nil {
+			fmt.Println("udp read:", err)
+			continue
+		}
+
+		err = udp.Execute(tag, val)
+		if err != nil {
+			fmt.Println("udp execute:", err)
+			continue
+		}
 	}
 }
 
@@ -247,22 +302,6 @@ func sendData(udp *tag.Udp, info typedef.ServerInfo) {
 
 		// fmt.Println(n)
 		time.Sleep(time.Second * 5)
-	}
-}
-
-func configureUdp(udp *tag.Udp) {
-	for {
-		tag, val, err := udp.Read()
-		if err != nil {
-			fmt.Println("udp read:", err)
-			continue
-		}
-
-		err = udp.Execute(tag, val)
-		if err != nil {
-			fmt.Println("udp execute:", err)
-			continue
-		}
 	}
 }
 
