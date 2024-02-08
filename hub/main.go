@@ -265,15 +265,9 @@ func configureUdp(udp *tag.Udp) {
 	udp.Handle(3073, receiveDeviceInfo)
 
 	for {
-		tag, val, err := udp.Read()
+		err := udp.ReadAndExec()
 		if err != nil {
-			fmt.Println("udp read:", err)
-			continue
-		}
-
-		err = udp.Execute(tag, val)
-		if err != nil {
-			fmt.Println("udp execute:", err)
+			fmt.Println("udp readAndExec:", err)
 			continue
 		}
 	}

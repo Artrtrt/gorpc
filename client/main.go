@@ -139,16 +139,11 @@ func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 // UDP
 func configureUdp(udp *tag.Udp) {
 	udp.Handle(1025, connectToHub)
-	for {
-		tag, val, err := udp.Read()
-		if err != nil {
-			fmt.Println("udp read:", err)
-			continue
-		}
 
-		err = udp.Execute(tag, val)
+	for {
+		err := udp.ReadAndExec()
 		if err != nil {
-			fmt.Println("udp execute:", err)
+			fmt.Println("udp readAndExec:", err)
 			continue
 		}
 	}

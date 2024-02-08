@@ -32,6 +32,30 @@ func (u *Udp) Handle(tag uint16, handlefunc HandleFunc) {
 	u.handle[tag] = handlefunc
 }
 
+func (u *Udp) ReadAndExec() (err error) {
+	tag, val, err := u.Read()
+
+	if tag == 1 {
+		err = fmt.Errorf("remote err: %s", val)
+		return
+	}
+
+	_, ok := u.handle[tag]
+	if !ok {
+		u.Write(u.Raddr, 1, []byte("unknown tag"))
+		return
+	}
+
+	err = u.handle[tag](u, tag, val)
+	if err != nil {
+		u.Write(u.Raddr, 1, []byte(err.Error()))
+		err = fmt.Errorf("%s", err)
+		return
+	}
+
+	return
+}
+
 func (u *Udp) Execute(tag uint16, value []byte) (err error) {
 	if u.Raddr == nil {
 		return errors.New("remote addr is nil")

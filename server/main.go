@@ -272,15 +272,9 @@ func acceptDevice(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 // UDP
 func configureUdp(udp *tag.Udp) {
 	for {
-		tag, val, err := udp.Read()
+		err := udp.ReadAndExec()
 		if err != nil {
-			fmt.Println("udp read:", err)
-			continue
-		}
-
-		err = udp.Execute(tag, val)
-		if err != nil {
-			fmt.Println("udp execute:", err)
+			fmt.Println("udp readAndExec:", err)
 			continue
 		}
 	}
