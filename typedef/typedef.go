@@ -2,10 +2,9 @@ package typedef
 
 import "errors"
 
-type DeviceInfo struct {
+type GenericInfo struct {
 	Mac    [32]byte
 	Uptime int64
-	Busy   bool
 }
 
 type ServerInfo struct {

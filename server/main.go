@@ -17,13 +17,28 @@ import (
 	"typedef"
 )
 
+// type Server struct {
+// 	Control *typedef.ServerInfoControl
+// 	Info    *typedef.GenericInfo
+// }
+
+// func NewServer(addr [32]byte, connectionLimit uint32, info *typedef.GenericInfo) *Server {
+// 	return &Server{
+// 		Control: typedef.NewServerInfoControl(addr, connectionLimit),
+// 		Info:    info,
+// 	}
+// }
+
 var (
-	err                  error
-	privateKey           *rsa.PrivateKey
-	publicKey            *rsa.PublicKey
+	err  error
+	info typedef.GenericInfo
+
+	privateKey *rsa.PrivateKey
+	publicKey  *rsa.PublicKey
+
 	addr                 string = "localhost:8082"
 	hubUDPAddr           *net.UDPAddr
-	wantToConnectStorage = make(map[[32]byte]typedef.DeviceInfo)
+	wantToConnectStorage = make(map[[32]byte]typedef.GenericInfo)
 )
 
 func handleRPC(w http.ResponseWriter, r *http.Request) {
@@ -136,10 +151,12 @@ func main() {
 	}
 
 	go configureUdp(udp)
-	var byteAddr [32]byte
-	copy(byteAddr[:], []byte(addr))
-	control := typedef.NewServerInfoControl(byteAddr, 1000)
-	sendData(udp, control.ServerInfo)
+	macBytes := [32]byte{}
+	copy(macBytes[:], []byte("AB:15:31:AA:93:27"))
+	serverInfo := typedef.GenericInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000}
+	info = serverInfo
+	// control := typedef.NewServerInfoControl(serverInfo, 1000)
+	sendData(udp, info)
 }
 
 // TCP
@@ -186,7 +203,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 func configureTcp(lr *tagrpc.TCPListener) {
 	lr.HandleFunc(1, remoteErr)
 	lr.HandleFunc(1027, receiveDeviceInfo)
-	lr.HandleFunc(3075, acceptDevice)
+	lr.HandleFunc(3074, acceptDevice)
 }
 
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -194,7 +211,7 @@ func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 }
 
 func receiveDeviceInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	var deviceInfo typedef.DeviceInfo
+	var deviceInfo typedef.GenericInfo
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
 		err = fmt.Errorf("ByteToStruct: %s", err)
@@ -211,7 +228,7 @@ func receiveDeviceInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 }
 
 func acceptDevice(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	var deviceInfo typedef.DeviceInfo
+	var deviceInfo typedef.GenericInfo
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
 		err = fmt.Errorf("ByteToStruct: %s", err)
@@ -231,6 +248,8 @@ func acceptDevice(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 
 // UDP
 func configureUdp(udp *tag.Udp) {
+	udp.HandleFunc(1025, connectToHub)
+
 	for {
 		err := udp.ReadAndExec()
 		if err != nil {
@@ -240,7 +259,28 @@ func configureUdp(udp *tag.Udp) {
 	}
 }
 
-func sendData(udp *tag.Udp, info typedef.ServerInfo) {
+func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
+	conn, err := tcp.InitConnect(string(val), 2050, info, publicKey, privateKey)
+	if err != nil {
+		err = fmt.Errorf("InitConnect: %s", err)
+		return
+	}
+
+	// configureTcpForHub(conn)
+	fmt.Println("Подключился к хабу")
+	go func() {
+		for {
+			err = conn.Update(time.Second * 30)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+		}
+	}()
+	return
+}
+
+func sendData(udp *tag.Udp, info typedef.GenericInfo) {
 	for {
 		info, err := xbyte.StructToByte(info)
 		if err != nil {

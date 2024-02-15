@@ -28,8 +28,8 @@ func NewUdp(addr string) (*Udp, error) {
 		nil
 }
 
-func (u *Udp) Handle(tag uint16, handlefunc HandleFunc) {
-	u.handle[tag] = handlefunc
+func (u *Udp) HandleFunc(tag uint16, handle HandleFunc) {
+	u.handle[tag] = handle
 }
 
 func (u *Udp) ReadAndExec() (err error) {

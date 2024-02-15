@@ -17,53 +17,13 @@ import (
 
 var (
 	err  error
-	info typedef.DeviceInfo
+	info typedef.GenericInfo
 
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 
 	hubUDPAddr *net.UDPAddr
 )
-
-func InitConnect(addr string) (conn *tagrpc.TCPConn, err error) {
-	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
-	if err != nil {
-		err = fmt.Errorf("ResolveTCPAddr: %s", err)
-		return
-	}
-
-	conn, err = tagrpc.DialTCP(nil, tcpAddr)
-	if err != nil {
-		err = fmt.Errorf("DialTCP: %s", err)
-		return
-	}
-
-	serverPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
-	if err != nil {
-		err = fmt.Errorf("RsaKeyExchange: %s", err)
-		return
-	}
-
-	conn.Codec = tagrpc.NewRsaCodec(privateKey, serverPublicKey)
-	if err != nil {
-		err = fmt.Errorf("dialTcp: %s", err)
-		return
-	}
-
-	telemetry, err := xbyte.StructToByte(info)
-	if err != nil {
-		err = fmt.Errorf("StructToByte: %s", err)
-		return
-	}
-
-	err = conn.Write(3075, telemetry)
-	if err != nil {
-		err = fmt.Errorf("conn.Write: %s", err)
-		return
-	}
-
-	return
-}
 
 func main() {
 	publicKey, err = rsautil.PemToPublicKey("public.pem")
@@ -95,7 +55,7 @@ func main() {
 
 	macBytes := [32]byte{}
 	copy(macBytes[:], []byte("AB:15:31:AA:93:26"))
-	deviceInfo := typedef.DeviceInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
+	deviceInfo := typedef.GenericInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000}
 	info = deviceInfo
 	sendData(udp, info)
 }
@@ -115,7 +75,7 @@ func connectToServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 		return r == 0
 	})
 
-	conn, err := InitConnect(string(val))
+	conn, err := tcp.InitConnect(string(val), 3074, info, publicKey, privateKey)
 	if err != nil {
 		fmt.Println("InitConnect", err)
 		return
@@ -138,7 +98,7 @@ func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 
 // UDP
 func configureUdp(udp *tag.Udp) {
-	udp.Handle(1025, connectToHub)
+	udp.HandleFunc(1025, connectToHub)
 
 	for {
 		err := udp.ReadAndExec()
@@ -150,7 +110,7 @@ func configureUdp(udp *tag.Udp) {
 }
 
 func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
-	conn, err := InitConnect(string(val))
+	conn, err := tcp.InitConnect(string(val), 3074, info, publicKey, privateKey)
 	if err != nil {
 		err = fmt.Errorf("InitConnect: %s", err)
 		return
@@ -170,7 +130,7 @@ func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
 	return
 }
 
-func sendData(udp *tag.Udp, deviceInfo typedef.DeviceInfo) {
+func sendData(udp *tag.Udp, deviceInfo typedef.GenericInfo) {
 	for {
 		telemetry, err := xbyte.StructToByte(deviceInfo)
 		if err != nil {

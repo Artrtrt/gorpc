@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rsa"
 	"database/sql"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"net"
@@ -24,15 +25,16 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-type DeviceStorage struct {
-	DeviceInfo typedef.DeviceInfo
-	Time       int64
-	SentToDB   bool
-	ToConnTCP  bool
+type DevicePayload struct {
+	GenericInfo typedef.GenericInfo
+	Time        int64
+	SentToDB    bool
+	ToConnTCP   bool
 }
 
-type ServerStorage struct {
-	ServerInfo typedef.ServerInfo
+type ServerPayload struct {
+	GenericInfo typedef.GenericInfo
+	ServerInfo  typedef.ServerInfo
 }
 
 var (
@@ -43,8 +45,9 @@ var (
 	addrStr  string = "localhost:8080"
 	httpAddr string = ":8081"
 
-	deviceStorage = make(map[[32]byte]DeviceStorage)
-	serverStorage = make(map[[32]byte]typedef.ServerInfo)
+	serverList    []string
+	deviceStorage = make(map[[32]byte]DevicePayload)
+	serverStorage = make(map[*tagrpc.TCPConn]ServerPayload)
 )
 
 func httpServer() {
@@ -71,12 +74,11 @@ func httpServer() {
 			}
 
 			payload := deviceStorage[macBytes]
-			if payload.DeviceInfo.Busy {
+			if payload.ToConnTCP {
 				fmt.Fprint(rw, "Устройство занято")
 				return
 			} else {
 				payload.ToConnTCP = true
-				payload.DeviceInfo.Busy = true
 				deviceStorage[macBytes] = payload
 			}
 		}
@@ -94,6 +96,19 @@ func main() {
 	privateKey, err = rsautil.PemToPrivateKey("private.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey", err)
+		return
+	}
+
+	file, err := os.Open("serverlist.csv")
+	if err != nil {
+		fmt.Println("Open", err)
+		return
+	}
+
+	defer file.Close()
+	serverList, err = csv.NewReader(file).Read()
+	if err != nil {
+		fmt.Println("Read", err)
 		return
 	}
 
@@ -162,9 +177,10 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			}
 
 			conn.Codec = tagrpc.NewRsaCodec(privateKey, clientPublicKey)
-			fmt.Println("Подключился " + conn.Tcp.RemoteAddr().String())
+			addr := conn.Tcp.RemoteAddr().String()
+			fmt.Println("Подключился " + addr)
 			for {
-				err = conn.Update(100000000000000)
+				err = conn.Update(time.Second * 30)
 				if err != nil {
 					fmt.Println(err)
 					return
@@ -176,20 +192,48 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 
 func configureTcp(lr *tagrpc.TCPListener) {
 	lr.HandleFunc(1, remoteErr)
-	lr.HandleFunc(3075, sendServerAddr)
+	// lr.HandleFunc(2050, acceptServer)
+	lr.HandleFunc(3074, sendServerAddr)
 }
 
 func configureTcpForServer(conn *tagrpc.TCPConn) {
-	conn.HandleFunc(2050, sendClientHttpAddr)
-	conn.HandleFunc(2051, closeDeviceConnection)
+	conn.HandleFunc(2051, sendClientHttpAddr)
+	conn.HandleFunc(2052, closeDeviceConnection)
 }
 
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	return errors.New(fmt.Sprint("remoteErr:", string(val)))
 }
 
+// func acceptServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+// 	serverInfo := typedef.GenericInfo{}
+// 	err = xbyte.ByteToStruct(val, &serverInfo)
+// 	if err != nil {
+// 		err = fmt.Errorf("ByteToStruct: %s", err)
+// 		return
+// 	}
+
+// 	if !contains(serverList, byteArrToString(serverInfo.Mac[:])) {
+// 		n.Close()
+// 	}
+
+// 	if serverStorageContains(serverStorage, serverInfo.Mac) {
+// 		n.Write(1, []byte("Device already connect"))
+// 		return
+// 	}
+
+// 	resp, err := n.Execute(1029, nil)
+// 	if err != nil {
+// 		err = fmt.Errorf("execute: %s", err)
+// 		return
+// 	}
+
+// 	fmt.Println(resp)
+// 	return
+// }
+
 func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	deviceInfo := typedef.DeviceInfo{}
+	deviceInfo := typedef.GenericInfo{}
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
 		err = fmt.Errorf("ByteToStruct: %s", err)
@@ -206,7 +250,7 @@ func closeDeviceConnection(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 }
 
 func sendServerAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	deviceInfo := typedef.DeviceInfo{} // Проверяет подключенное устройство
+	deviceInfo := typedef.GenericInfo{} // Проверяет подключенное устройство
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
 		err = fmt.Errorf("ByteToStruct: %s", err)
@@ -221,7 +265,8 @@ func sendServerAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 
 	info.ToConnTCP = false
 	deviceStorage[deviceInfo.Mac] = info
-	addr, err := lessBusyServer(serverStorage) // Ищет наименее загруженный сервер
+	// addr, err := lessBusyServer(serverStorage) // Ищет наименее загруженный сервер
+	addr := []byte{0} // убрать
 	if err != nil {
 		n.Write(1, []byte(fmt.Sprintf("lessBusyServer %s", err)))
 		err = fmt.Errorf("lessBusyServer: %s", err)
@@ -233,11 +278,7 @@ func sendServerAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	trimAddr := bytes.TrimRightFunc(addr[:], func(r rune) bool { // Отправляет информацию об устройстве серверу
-		return r == 0
-	})
-
-	serverAddr, err := net.ResolveTCPAddr("tcp", string(trimAddr))
+	serverAddr, err := net.ResolveTCPAddr("tcp", byteArrToString(addr[:])) // Отправляет информацию об устройстве серверу
 	if err != nil {
 		err = fmt.Errorf("ResolveTCPAddr: %s", err)
 		return
@@ -278,6 +319,16 @@ func sendServerAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	return
 }
 
+func serverStorageContains(storage map[*tagrpc.TCPConn]ServerPayload, mac [32]byte) bool {
+	for _, payload := range storage {
+		if payload.GenericInfo.Mac == mac {
+			return true
+		}
+	}
+
+	return false
+}
+
 func lessBusyServer(storage map[[32]byte]typedef.ServerInfo) (serverAddr [32]byte, err error) {
 	if len(storage) == 0 {
 		err = fmt.Errorf("%s", "No servers")
@@ -295,8 +346,8 @@ func lessBusyServer(storage map[[32]byte]typedef.ServerInfo) (serverAddr [32]byt
 
 // UDP
 func configureUdp(udp *tag.Udp) {
-	udp.Handle(2049, receiveServerInfo)
-	udp.Handle(3073, receiveDeviceInfo)
+	udp.HandleFunc(2049, receiveServerInfo)
+	udp.HandleFunc(3073, receiveDeviceInfo)
 
 	for {
 		err := udp.ReadAndExec()
@@ -308,29 +359,41 @@ func configureUdp(udp *tag.Udp) {
 }
 
 func receiveServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
-	serverInfo := typedef.ServerInfo{}
+	serverInfo := typedef.GenericInfo{}
 	err = xbyte.ByteToStruct(val, &serverInfo)
 	if err != nil {
 		err = fmt.Errorf("ByteToStruct: %s", err)
 		return
 	}
 
-	_, ok := serverStorage[serverInfo.Addr]
-	if ok {
-		data := serverStorage[serverInfo.Addr]
-		data.ConnectionCount = serverInfo.ConnectionCount
-		data.ConnectionLimit = serverInfo.ConnectionLimit
-	} else {
-		serverStorage[serverInfo.Addr] = typedef.ServerInfo{
-			Addr: serverInfo.Addr, ConnectionCount: serverInfo.ConnectionCount, ConnectionLimit: serverInfo.ConnectionLimit,
-		}
+	if !contains(serverList, byteArrToString(serverInfo.Mac[:])) {
+		_, err = u.Write(u.Raddr, 1, []byte("Unknown device"))
+		return
+	}
+
+	// serverInStorage := false
+	// for _, info := range serverStorage {
+	// 	if info.Addr == serverInfo.Addr {
+	// 		serverInStorage = true
+	// 		break
+	// 	}
+	// }
+
+	// if serverInStorage {
+	// 	return
+	// }
+
+	_, err = u.Write(u.Raddr, 1025, []byte(addrStr))
+	if err != nil {
+		err = fmt.Errorf("UdpWrite: %s", err)
+		return
 	}
 
 	return
 }
 
 func receiveDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
-	deviceInfo := typedef.DeviceInfo{}
+	deviceInfo := typedef.GenericInfo{}
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
 		err = fmt.Errorf("ByteToStruct: %s", err)
@@ -342,7 +405,7 @@ func receiveDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 	if ok {
 		data := deviceStorage[deviceInfo.Mac]
 		data.Time = time
-		data.DeviceInfo = deviceInfo
+		data.GenericInfo = deviceInfo
 		deviceStorage[deviceInfo.Mac] = data
 		if data.ToConnTCP {
 			_, err = u.Write(u.Raddr, 1025, []byte(addrStr))
@@ -353,13 +416,28 @@ func receiveDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 		}
 		// fmt.Printf("Данные о роутере %s обновились\n", string(deviceInfo.Mac[:]))
 	} else {
-		deviceStorage[deviceInfo.Mac] = DeviceStorage{
+		deviceStorage[deviceInfo.Mac] = DevicePayload{
 			deviceInfo, time, false, false,
 		}
 		// fmt.Printf("Роутер %s добавлен\n", deviceInfo.Mac)
 	}
 
 	return
+}
+
+func byteArrToString(arr []byte) string {
+	return string(bytes.TrimRightFunc(arr, func(r rune) bool {
+		return r == 0
+	}))
+}
+
+func contains(arr []string, str string) bool {
+	for _, val := range arr {
+		if strings.Contains(val, str) {
+			return true
+		}
+	}
+	return false
 }
 
 // -----------------------------
@@ -407,7 +485,7 @@ func toSql(dbChan chan bool) (err error) {
 		}
 
 		_, err := db.Exec(fmt.Sprintf("INSERT INTO deviceInfo (mac) VALUES ('%s');",
-			value.DeviceInfo.Mac,
+			value.GenericInfo.Mac,
 		))
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
