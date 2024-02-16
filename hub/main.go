@@ -145,7 +145,7 @@ func main() {
 	}
 
 	defer tcpLr.Close()
-	configureTcp(tcpLr)
+	tcpLr.HandleFunc(1, remoteErr)
 	acceptTcp(tcpLr)
 	// go func() {
 	// 	for {
@@ -169,31 +169,68 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			continue
 		}
 
-		go func() {
-			clientPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
+		addr := conn.Tcp.RemoteAddr().String()
+		fmt.Println("Подключился " + addr)
+		go func(conn *tagrpc.TCPConn) {
+			for {
+				err = conn.Update(time.Second * 60)
+				if err != nil {
+					fmt.Println("trpc", err)
+					conn.Close()
+					fmt.Println("Отключился " + addr)
+					break
+				}
+			}
+		}(conn)
+
+		go func(conn *tagrpc.TCPConn) {
+			dst, err := xbyte.RsaPublicToByte(publicKey)
 			if err != nil {
-				fmt.Println("RsaKeyExchange", err)
+				fmt.Println("RsaPublicToByte", err)
+				return
+			}
+
+			response, err := conn.Execute(2, dst)
+			if err != nil {
+				fmt.Println("Execute", err)
+				return
+			}
+
+			clientPublicKey, err := xbyte.ByteToRsaPublic(response)
+			if err != nil {
+				fmt.Println("ByteToRsaPublic", err)
 				return
 			}
 
 			conn.Codec = tagrpc.NewRsaCodec(privateKey, clientPublicKey)
-			addr := conn.Tcp.RemoteAddr().String()
-			fmt.Println("Подключился " + addr)
-			for {
-				err = conn.Update(time.Second * 30)
-				if err != nil {
-					fmt.Println(err)
-					return
-				}
+
+			response, err = conn.Execute(1028, []byte{})
+			if err != nil {
+				fmt.Println("Execute", err)
+				return
 			}
-		}()
+
+			var genericInfo typedef.GenericInfo
+			err = xbyte.ByteToStruct(response, &genericInfo)
+			if err != nil {
+				fmt.Println("ByteToStruct:", err)
+				return
+			}
+
+			if serverStorageContains(serverStorage, genericInfo.Mac) {
+				configureTcpForServer(conn)
+			} else if deviceStorageContains(deviceStorage, genericInfo.Mac) {
+				configureTcpForDevice(conn)
+			} else {
+				conn.Close()
+			}
+		}(conn)
 	}
 }
 
-func configureTcp(lr *tagrpc.TCPListener) {
-	lr.HandleFunc(1, remoteErr)
-	// lr.HandleFunc(2050, acceptServer)
-	lr.HandleFunc(3074, sendServerAddr)
+func configureTcpForDevice(conn *tagrpc.TCPConn) {
+	// conn.HandleFunc(2050, acceptServer)
+	conn.HandleFunc(3074, sendServerAddr)
 }
 
 func configureTcpForServer(conn *tagrpc.TCPConn) {
@@ -319,6 +356,17 @@ func sendServerAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	return
 }
 
+// FIXIT
+func deviceStorageContains(storage map[[32]byte]DevicePayload, mac [32]byte) bool {
+	for _, payload := range storage {
+		if payload.GenericInfo.Mac == mac {
+			return true
+		}
+	}
+
+	return false
+}
+
 func serverStorageContains(storage map[*tagrpc.TCPConn]ServerPayload, mac [32]byte) bool {
 	for _, payload := range storage {
 		if payload.GenericInfo.Mac == mac {
@@ -370,18 +418,6 @@ func receiveServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 		_, err = u.Write(u.Raddr, 1, []byte("Unknown device"))
 		return
 	}
-
-	// serverInStorage := false
-	// for _, info := range serverStorage {
-	// 	if info.Addr == serverInfo.Addr {
-	// 		serverInStorage = true
-	// 		break
-	// 	}
-	// }
-
-	// if serverInStorage {
-	// 	return
-	// }
 
 	_, err = u.Write(u.Raddr, 1025, []byte(addrStr))
 	if err != nil {

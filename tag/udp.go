@@ -48,7 +48,6 @@ func (u *Udp) ReadAndExec() (err error) {
 
 	err = u.handle[tag](u, tag, val)
 	if err != nil {
-		u.Write(u.Raddr, 1, []byte(err.Error()))
 		err = fmt.Errorf("%s", err)
 		return
 	}

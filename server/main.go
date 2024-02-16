@@ -156,7 +156,22 @@ func main() {
 	serverInfo := typedef.GenericInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000}
 	info = serverInfo
 	// control := typedef.NewServerInfoControl(serverInfo, 1000)
-	sendData(udp, info)
+	for {
+		info, err := xbyte.StructToByte(info)
+		if err != nil {
+			fmt.Println("StructToByte:", err)
+			continue
+		}
+
+		_, err = udp.Write(hubUDPAddr, uint16(2049), info)
+		if err != nil {
+			fmt.Println("UdpWrite:", err)
+			continue
+		}
+
+		// fmt.Println(n)
+		time.Sleep(time.Second * 5)
+	}
 }
 
 // TCP
@@ -168,7 +183,18 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			continue
 		}
 
-		go func() {
+		go func(conn *tagrpc.TCPConn) {
+			for {
+				err = conn.Update(time.Second * 60)
+				if err != nil {
+					fmt.Println(err)
+					conn.Close()
+					break
+				}
+			}
+		}(conn)
+
+		go func(conn *tagrpc.TCPConn) {
 			raddr := conn.Tcp.RemoteAddr().String()
 			clientPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
 			if err != nil {
@@ -189,14 +215,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			port := listener.Addr().(*net.TCPAddr).Port
 			go httpServer(port, raddr)
 
-			for {
-				err = conn.Update(100000000000000)
-				if err != nil {
-					fmt.Println(err)
-					return
-				}
-			}
-		}()
+		}(conn)
 	}
 }
 
@@ -246,6 +265,51 @@ func acceptDevice(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	return
 }
 
+func configureTcpForHub(conn *tagrpc.TCPConn) {
+	conn.HandleFunc(1, remoteErr)
+	conn.HandleFunc(2, rsaSetup)
+	conn.HandleFunc(1028, sendInfo)
+}
+
+func rsaSetup(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	hubPublicKey, err := xbyte.ByteToRsaPublic(val)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "ByteToRsaPublic:", err)
+		return
+	}
+
+	dst, err := xbyte.RsaPublicToByte(publicKey)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "RsaPublicToByte:", err)
+		return
+	}
+
+	err = n.Response(2, dst)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "Response:", err)
+		return
+	}
+
+	n.Codec = tagrpc.NewRsaCodec(privateKey, hubPublicKey)
+	return
+}
+
+func sendInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	telemetry, err := xbyte.StructToByte(info)
+	if err != nil {
+		err = fmt.Errorf("StructToByte: %s", err)
+		return
+	}
+
+	err = n.Response(1028, telemetry)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "Response:", err)
+		return
+	}
+
+	return
+}
+
 // UDP
 func configureUdp(udp *tag.Udp) {
 	udp.HandleFunc(1025, connectToHub)
@@ -260,43 +324,29 @@ func configureUdp(udp *tag.Udp) {
 }
 
 func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
-	conn, err := tcp.InitConnect(string(val), 2050, info, publicKey, privateKey)
+	hubAddr, err := net.ResolveTCPAddr("tcp", string(val))
 	if err != nil {
-		err = fmt.Errorf("InitConnect: %s", err)
+		err = fmt.Errorf("ResolveTCPAddr: %s", err)
 		return
 	}
 
-	// configureTcpForHub(conn)
-	fmt.Println("Подключился к хабу")
-	go func() {
-		for {
-			err = conn.Update(time.Second * 30)
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
-		}
-	}()
-	return
-}
-
-func sendData(udp *tag.Udp, info typedef.GenericInfo) {
-	for {
-		info, err := xbyte.StructToByte(info)
-		if err != nil {
-			fmt.Println("StructToByte:", err)
-			continue
-		}
-
-		_, err = udp.Write(hubUDPAddr, uint16(2049), info)
-		if err != nil {
-			fmt.Println("UdpWrite:", err)
-			continue
-		}
-
-		// fmt.Println(n)
-		time.Sleep(time.Second * 5)
+	conn, err := tagrpc.DialTCP(nil, hubAddr)
+	if err != nil {
+		err = fmt.Errorf("DialTCP: %s", err)
+		return
 	}
+
+	configureTcpForHub(conn)
+	fmt.Println("Подключился к хабу")
+	for {
+		err = conn.Update(time.Second * 60)
+		if err != nil {
+			err = fmt.Errorf("trpc: %s", err)
+			break
+		}
+	}
+
+	return
 }
 
 // dir, _ := os.Open("./dist")
