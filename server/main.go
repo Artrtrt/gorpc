@@ -17,26 +17,27 @@ import (
 	"typedef"
 )
 
-// type Server struct {
-// 	Control *typedef.ServerInfoControl
-// 	Info    *typedef.GenericInfo
-// }
+type Server struct {
+	Control *typedef.ServerInfoControl
+	Info    *typedef.GenericInfo
+}
 
-// func NewServer(addr [32]byte, connectionLimit uint32, info *typedef.GenericInfo) *Server {
-// 	return &Server{
-// 		Control: typedef.NewServerInfoControl(addr, connectionLimit),
-// 		Info:    info,
-// 	}
-// }
+func NewServer(addr [32]byte, connectionLimit uint32, info *typedef.GenericInfo) *Server {
+	return &Server{
+		Control: typedef.NewServerInfoControl(addr, connectionLimit),
+		Info:    info,
+	}
+}
 
 var (
-	err  error
-	info typedef.GenericInfo
+	err    error
+	server *Server
 
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 
-	addr                 string = "localhost:8082"
+	addr                 string = "localhost:8083"
+	mac                  string = "AB:15:31:AA:93:27"
 	hubUDPAddr           *net.UDPAddr
 	wantToConnectStorage = make(map[[32]byte]typedef.GenericInfo)
 )
@@ -152,12 +153,14 @@ func main() {
 
 	go configureUdp(udp)
 	macBytes := [32]byte{}
-	copy(macBytes[:], []byte("AB:15:31:AA:93:27"))
-	serverInfo := typedef.GenericInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000}
-	info = serverInfo
-	// control := typedef.NewServerInfoControl(serverInfo, 1000)
+	addrBytes := [32]byte{}
+	copy(macBytes[:], []byte(mac))
+	copy(addrBytes[:], []byte(addr))
+	serverInfo := &typedef.GenericInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000}
+	server = NewServer(addrBytes, 100, serverInfo)
+
 	for {
-		info, err := xbyte.StructToByte(info)
+		info, err := xbyte.StructToByte(server.Info)
 		if err != nil {
 			fmt.Println("StructToByte:", err)
 			continue
@@ -268,7 +271,8 @@ func acceptDevice(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 func configureTcpForHub(conn *tagrpc.TCPConn) {
 	conn.HandleFunc(1, remoteErr)
 	conn.HandleFunc(2, rsaSetup)
-	conn.HandleFunc(1028, sendInfo)
+	conn.HandleFunc(1028, sendGenericInfo)
+	conn.HandleFunc(1029, sendServerInfo)
 }
 
 func rsaSetup(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -294,14 +298,30 @@ func rsaSetup(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	return
 }
 
-func sendInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	telemetry, err := xbyte.StructToByte(info)
+func sendGenericInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	telemetry, err := xbyte.StructToByte(server.Info)
 	if err != nil {
 		err = fmt.Errorf("StructToByte: %s", err)
 		return
 	}
 
 	err = n.Response(1028, telemetry)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "Response:", err)
+		return
+	}
+
+	return
+}
+
+func sendServerInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	serverInfo, err := xbyte.StructToByte(server.Control.ServerInfo)
+	if err != nil {
+		err = fmt.Errorf("StructToByte: %s", err)
+		return
+	}
+
+	err = n.Response(1029, serverInfo)
 	if err != nil {
 		err = fmt.Errorf("%s %s", "Response:", err)
 		return

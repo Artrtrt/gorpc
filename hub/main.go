@@ -168,13 +168,16 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			fmt.Println("AcceptTCP", err)
 			continue
 		}
-
 		addr := conn.Tcp.RemoteAddr().String()
 		fmt.Println("Подключился " + addr)
 		go func(conn *tagrpc.TCPConn) {
 			for {
 				err = conn.Update(time.Second * 60)
 				if err != nil {
+					_, ok := serverStorage[conn]
+					if ok {
+						delete(serverStorage, conn)
+					}
 					fmt.Println("trpc", err)
 					conn.Close()
 					fmt.Println("Отключился " + addr)
@@ -217,8 +220,26 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
-			if serverStorageContains(serverStorage, genericInfo.Mac) {
+			if contains(serverList, byteArrToString(genericInfo.Mac[:])) {
+				if serverStorageContains(serverStorage, genericInfo.Mac) {
+					return
+				}
+
 				configureTcpForServer(conn)
+				response, err = conn.Execute(1029, []byte{})
+				if err != nil {
+					fmt.Println("Execute", err)
+					return
+				}
+
+				var serverInfo typedef.ServerInfo
+				err = xbyte.ByteToStruct(response, &serverInfo)
+				if err != nil {
+					fmt.Println("ByteToStruct:", err)
+					return
+				}
+
+				serverStorage[conn] = ServerPayload{GenericInfo: genericInfo, ServerInfo: serverInfo}
 			} else if deviceStorageContains(deviceStorage, genericInfo.Mac) {
 				configureTcpForDevice(conn)
 			} else {
