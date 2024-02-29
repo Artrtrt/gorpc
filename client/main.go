@@ -10,7 +10,6 @@ import (
 	"net"
 	"rsautil"
 	"tag"
-	"tcp"
 	"time"
 	"typedef"
 )
@@ -61,13 +60,34 @@ func main() {
 }
 
 // TCP
-func configureTcpForHub(conn *tagrpc.TCPConn) {
+func configureTcp(conn *tagrpc.TCPConn) {
 	conn.HandleFunc(1, remoteErr)
+	conn.HandleFunc(2, rsaSetup)
 	conn.HandleFunc(1026, connectToServer)
+	conn.HandleFunc(1028, sendGenericInfo)
 }
 
-func configureTcpForServer(conn *tagrpc.TCPConn) {
-	conn.HandleFunc(1, remoteErr)
+func rsaSetup(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	rPublicKey, err := xbyte.ByteToRsaPublic(val)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "ByteToRsaPublic:", err)
+		return
+	}
+
+	dst, err := xbyte.RsaPublicToByte(publicKey)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "RsaPublicToByte:", err)
+		return
+	}
+
+	err = n.Response(2, dst)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "Response:", err)
+		return
+	}
+
+	n.Codec = tagrpc.NewRsaCodec(privateKey, rPublicKey)
+	return
 }
 
 func connectToServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -75,16 +95,22 @@ func connectToServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 		return r == 0
 	})
 
-	conn, err := tcp.InitConnect(string(val), 3074, info, publicKey, privateKey)
+	tcpAddr, err := net.ResolveTCPAddr("tcp", string(val))
 	if err != nil {
-		fmt.Println("InitConnect", err)
+		err = fmt.Errorf("ResolveTCPAddr: %s", err)
 		return
 	}
 
-	configureTcpForServer(conn)
+	conn, err := tagrpc.DialTCP(nil, tcpAddr)
+	if err != nil {
+		err = fmt.Errorf("DialTCP: %s", err)
+		return
+	}
+
+	configureTcp(conn)
 	fmt.Printf("Подключился к серверу %s\n", conn.Tcp.RemoteAddr())
 	for {
-		err = conn.Update(100000000000000)
+		err = conn.Update(time.Second * 60)
 		if err != nil {
 			fmt.Println(err)
 			return
@@ -92,8 +118,24 @@ func connectToServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	}
 }
 
+func sendGenericInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	telemetry, err := xbyte.StructToByte(info)
+	if err != nil {
+		err = fmt.Errorf("StructToByte: %s", err)
+		return
+	}
+
+	err = n.Response(1028, telemetry)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "Response:", err)
+		return
+	}
+
+	return
+}
+
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	return errors.New(fmt.Sprint("remoteErr:", string(val)))
+	return errors.New(fmt.Sprint("remoteErr: ", string(val)))
 }
 
 // UDP
@@ -110,17 +152,23 @@ func configureUdp(udp *tag.Udp) {
 }
 
 func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
-	conn, err := tcp.InitConnect(string(val), 3074, info, publicKey, privateKey)
+	hubAddr, err := net.ResolveTCPAddr("tcp", string(val))
 	if err != nil {
-		err = fmt.Errorf("InitConnect: %s", err)
+		err = fmt.Errorf("ResolveTCPAddr: %s", err)
 		return
 	}
 
-	configureTcpForHub(conn)
+	conn, err := tagrpc.DialTCP(nil, hubAddr)
+	if err != nil {
+		err = fmt.Errorf("DialTCP: %s", err)
+		return
+	}
+
+	configureTcp(conn)
 	fmt.Println("Подключился к хабу")
 	go func() {
 		for {
-			err = conn.Update(100000000000000)
+			err = conn.Update(time.Second * 100)
 			if err != nil {
 				fmt.Println(err)
 				return
