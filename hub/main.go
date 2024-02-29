@@ -14,7 +14,6 @@ import (
 	"strings"
 	"syscall"
 	"tag"
-	"tcp"
 	"time"
 
 	"gopack/tagrpc"
@@ -33,8 +32,8 @@ type DevicePayload struct {
 }
 
 type ServerPayload struct {
-	GenericInfo typedef.GenericInfo
-	ServerInfo  typedef.ServerInfo
+	GenericInfo *typedef.GenericInfo
+	ServerInfo  *typedef.ServerInfo
 }
 
 var (
@@ -225,23 +224,33 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					return
 				}
 
+				serverStorage[conn] = ServerPayload{&genericInfo, nil}
 				configureTcpForServer(conn)
-				response, err = conn.Execute(1029, []byte{})
-				if err != nil {
-					fmt.Println("Execute", err)
-					return
-				}
 
-				var serverInfo typedef.ServerInfo
-				err = xbyte.ByteToStruct(response, &serverInfo)
-				if err != nil {
-					fmt.Println("ByteToStruct:", err)
-					return
+				for {
+					err = updateServerInfo(conn)
+					if err != nil {
+						fmt.Println("updateServerInfo:", err)
+						return
+					}
+					time.Sleep(time.Second * 20)
 				}
-
-				serverStorage[conn] = ServerPayload{GenericInfo: genericInfo, ServerInfo: serverInfo}
 			} else if deviceStorageContains(deviceStorage, genericInfo.Mac) {
-				configureTcpForDevice(conn)
+				serverAddr, err := lessBusyServer(serverStorage)
+				if err != nil {
+					conn.Request(1, []byte(err.Error()))
+					fmt.Println("lessBusyServer:", err)
+					return
+				}
+
+				response, err = conn.Execute(1026, serverAddr[:])
+				if err != nil {
+					fmt.Println("lessBusyServer:", err)
+					return
+				}
+
+				fmt.Println(string(response))
+				conn.Close()
 			} else {
 				conn.Close()
 			}
@@ -249,9 +258,29 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 	}
 }
 
-func configureTcpForDevice(conn *tagrpc.TCPConn) {
-	// conn.HandleFunc(2050, acceptServer)
-	conn.HandleFunc(3074, sendServerAddr)
+func updateServerInfo(conn *tagrpc.TCPConn) (err error) {
+	_, ok := serverStorage[conn]
+	if !ok {
+		return errors.New("server not connect")
+	}
+
+	response, err := conn.Execute(1029, []byte{})
+	if err != nil {
+		fmt.Println("Execute", err)
+		return
+	}
+
+	var serverInfo typedef.ServerInfo
+	err = xbyte.ByteToStruct(response, &serverInfo)
+	if err != nil {
+		fmt.Println("ByteToStruct:", err)
+		return
+	}
+
+	server := serverStorage[conn]
+	server.ServerInfo = &serverInfo
+	serverStorage[conn] = server
+	return
 }
 
 func configureTcpForServer(conn *tagrpc.TCPConn) {
@@ -307,76 +336,6 @@ func closeDeviceConnection(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	return
 }
 
-func sendServerAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	deviceInfo := typedef.GenericInfo{} // Проверяет подключенное устройство
-	err = xbyte.ByteToStruct(val, &deviceInfo)
-	if err != nil {
-		err = fmt.Errorf("ByteToStruct: %s", err)
-		return
-	}
-
-	info, ok := deviceStorage[deviceInfo.Mac]
-	if !ok {
-		n.Write(1, []byte("Unknown device"))
-		return
-	}
-
-	info.ToConnTCP = false
-	deviceStorage[deviceInfo.Mac] = info
-	// addr, err := lessBusyServer(serverStorage) // Ищет наименее загруженный сервер
-	addr := []byte{0} // убрать
-	if err != nil {
-		n.Write(1, []byte(fmt.Sprintf("lessBusyServer %s", err)))
-		err = fmt.Errorf("lessBusyServer: %s", err)
-		return
-	}
-
-	if addr[0] == 0 {
-		err = fmt.Errorf("wrong server addr")
-		return
-	}
-
-	serverAddr, err := net.ResolveTCPAddr("tcp", byteArrToString(addr[:])) // Отправляет информацию об устройстве серверу
-	if err != nil {
-		err = fmt.Errorf("ResolveTCPAddr: %s", err)
-		return
-	}
-
-	serverConn, err := tagrpc.DialTCP(nil, serverAddr)
-	if err != nil {
-		err = fmt.Errorf("tagrpc DialTCP: %s", err)
-		return
-	}
-
-	serverPublicKey, err := tcp.RsaKeyExchange(serverConn, publicKey)
-	if err != nil {
-		fmt.Println("RsaKeyExchange:", err)
-		return
-	}
-
-	serverConn.Codec = tagrpc.NewRsaCodec(privateKey, serverPublicKey)
-	configureTcpForServer(serverConn)
-	serverConn.Write(1027, val)
-	if err != nil {
-		err = fmt.Errorf("tagrpc Write: %s", err)
-		return
-	}
-
-	err = n.Write(1026, addr[:]) // Отправляет адрес сервера на устройства
-	if err != nil {
-		err = fmt.Errorf("tagrpc Write: %s", err)
-		return
-	}
-
-	err = n.Close()
-	if err != nil {
-		fmt.Println("tagrpc Close", err)
-		return
-	}
-
-	return
-}
-
 // FIXIT
 func deviceStorageContains(storage map[[32]byte]DevicePayload, mac [32]byte) bool {
 	for _, payload := range storage {
@@ -398,16 +357,18 @@ func serverStorageContains(storage map[*tagrpc.TCPConn]ServerPayload, mac [32]by
 	return false
 }
 
-func lessBusyServer(storage map[[32]byte]typedef.ServerInfo) (serverAddr [32]byte, err error) {
+func lessBusyServer(storage map[*tagrpc.TCPConn]ServerPayload) (serverAddr [32]byte, err error) {
 	if len(storage) == 0 {
 		err = fmt.Errorf("%s", "No servers")
 		return
 	}
 
-	maxFreeConnections := 0
-	for addr, server := range storage {
-		if (server.ConnectionLimit - server.ConnectionCount) > uint32(maxFreeConnections) {
-			serverAddr = addr
+	maxFreeConn := 0
+	for _, server := range storage {
+		freeConn := server.ServerInfo.ConnectionLimit - server.ServerInfo.ConnectionCount
+		if freeConn > uint32(maxFreeConn) {
+			serverAddr = server.ServerInfo.Addr
+			maxFreeConn = int(freeConn)
 		}
 	}
 	return
@@ -415,8 +376,8 @@ func lessBusyServer(storage map[[32]byte]typedef.ServerInfo) (serverAddr [32]byt
 
 // UDP
 func configureUdp(udp *tag.Udp) {
-	udp.HandleFunc(2049, receiveServerInfo)
-	udp.HandleFunc(3073, receiveDeviceInfo)
+	udp.HandleFunc(2049, receiveGenericServerInfo)
+	udp.HandleFunc(3073, receiveGenericDeviceInfo)
 
 	for {
 		err := udp.ReadAndExec()
@@ -427,7 +388,7 @@ func configureUdp(udp *tag.Udp) {
 	}
 }
 
-func receiveServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
+func receiveGenericServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 	serverInfo := typedef.GenericInfo{}
 	err = xbyte.ByteToStruct(val, &serverInfo)
 	if err != nil {
@@ -449,7 +410,7 @@ func receiveServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 	return
 }
 
-func receiveDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
+func receiveGenericDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 	deviceInfo := typedef.GenericInfo{}
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
