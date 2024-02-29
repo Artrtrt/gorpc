@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"rsautil"
 	"tag"
-	"tcp"
 	"time"
 	"typedef"
 )
@@ -186,27 +185,54 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			continue
 		}
 
+		raddr := conn.Tcp.RemoteAddr().String()
+		fmt.Println("Подключился ", raddr)
+
 		go func(conn *tagrpc.TCPConn) {
 			for {
 				err = conn.Update(time.Second * 60)
 				if err != nil {
-					fmt.Println(err)
+					fmt.Println("trpc", err)
 					conn.Close()
+					fmt.Println("Отключился " + raddr)
 					break
 				}
 			}
 		}(conn)
 
 		go func(conn *tagrpc.TCPConn) {
-			raddr := conn.Tcp.RemoteAddr().String()
-			clientPublicKey, err := tcp.RsaKeyExchange(conn, publicKey)
+			dst, err := xbyte.RsaPublicToByte(publicKey)
 			if err != nil {
-				fmt.Println("RsaKeyExchange:", err)
+				fmt.Println("RsaPublicToByte", err)
+				return
+			}
+
+			response, err := conn.Execute(2, dst)
+			if err != nil {
+				fmt.Println("Execute", err)
+				return
+			}
+
+			clientPublicKey, err := xbyte.ByteToRsaPublic(response)
+			if err != nil {
+				fmt.Println("ByteToRsaPublic", err)
 				return
 			}
 
 			conn.Codec = tagrpc.NewRsaCodec(privateKey, clientPublicKey)
-			fmt.Println("Подключился ", raddr)
+
+			response, err = conn.Execute(1028, []byte{})
+			if err != nil {
+				fmt.Println("Execute", err)
+				return
+			}
+
+			var genericInfo typedef.GenericInfo
+			err = xbyte.ByteToStruct(response, &genericInfo)
+			if err != nil {
+				fmt.Println("ByteToStruct:", err)
+				return
+			}
 
 			listener, err := net.Listen("tcp", "localhost:0")
 			if err != nil {
