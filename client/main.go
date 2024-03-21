@@ -54,7 +54,7 @@ func main() {
 
 	macBytes := [32]byte{}
 	copy(macBytes[:], []byte("AB:15:31:AA:93:26"))
-	deviceInfo := typedef.GenericInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000}
+	deviceInfo := typedef.GenericInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
 	info = deviceInfo
 	sendData(udp, info)
 }
@@ -107,6 +107,10 @@ func sendGenericInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 }
 
 func connectToServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	if info.Busy {
+		return
+	}
+
 	val = bytes.TrimRightFunc(val, func(r rune) bool {
 		return r == 0
 	})
@@ -125,13 +129,27 @@ func connectToServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 
 	configureTcp(conn)
 	fmt.Printf("Подключился к серверу %s\n", conn.Tcp.RemoteAddr())
-	for {
-		err = conn.Update(time.Second * 60)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
+	err = n.Response(1026, []byte("OK"))
+	if err != nil {
+		err = fmt.Errorf("%s %s", "Response:", err)
+		return
 	}
+
+	go func(conn *tagrpc.TCPConn) {
+		info.Busy = true
+		defer func() {
+			info.Busy = false
+		}()
+		for {
+			err = conn.Update(time.Second * 60)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+		}
+	}(conn)
+
+	return
 }
 
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -152,6 +170,10 @@ func configureUdp(udp *tag.Udp) {
 }
 
 func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
+	if info.Busy {
+		return
+	}
+
 	hubAddr, err := net.ResolveTCPAddr("tcp", string(val))
 	if err != nil {
 		err = fmt.Errorf("ResolveTCPAddr: %s", err)
@@ -166,7 +188,7 @@ func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
 
 	configureTcp(conn)
 	fmt.Println("Подключился к хабу")
-	go func() {
+	go func(conn *tagrpc.TCPConn) {
 		for {
 			err = conn.Update(time.Second * 100)
 			if err != nil {
@@ -174,7 +196,7 @@ func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
 				return
 			}
 		}
-	}()
+	}(conn)
 	return
 }
 

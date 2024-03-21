@@ -155,7 +155,7 @@ func main() {
 	addrBytes := [32]byte{}
 	copy(macBytes[:], []byte(mac))
 	copy(addrBytes[:], []byte(addr))
-	serverInfo := &typedef.GenericInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000}
+	serverInfo := &typedef.GenericInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
 	server = NewServer(addrBytes, 100, serverInfo)
 
 	for {
@@ -268,11 +268,16 @@ func receiveDeviceInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	}
 
 	_, ok := wantToConnectStorage[deviceInfo.Mac]
-	if ok {
+	if !ok {
+		wantToConnectStorage[deviceInfo.Mac] = deviceInfo
+	}
+
+	err = n.Response(1027, []byte("OK"))
+	if err != nil {
+		err = fmt.Errorf("%s %s", "Response:", err)
 		return
 	}
 
-	wantToConnectStorage[deviceInfo.Mac] = deviceInfo
 	return
 }
 
@@ -353,6 +358,10 @@ func configureUdp(udp *tag.Udp) {
 }
 
 func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
+	if server.Info.Busy {
+		return
+	}
+
 	hubAddr, err := net.ResolveTCPAddr("tcp", string(val))
 	if err != nil {
 		err = fmt.Errorf("ResolveTCPAddr: %s", err)
@@ -367,13 +376,19 @@ func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
 
 	configureTcpForHub(conn)
 	fmt.Println("Подключился к хабу")
-	for {
-		err = conn.Update(time.Second * 60)
-		if err != nil {
-			err = fmt.Errorf("trpc: %s", err)
-			break
+	server.Info.Busy = true
+	go func(*tagrpc.TCPConn) {
+		defer func() {
+			server.Info.Busy = false
+		}()
+		for {
+			err = conn.Update(time.Second * 60)
+			if err != nil {
+				fmt.Println("trpc:", err)
+				return
+			}
 		}
-	}
+	}(conn)
 
 	return
 }

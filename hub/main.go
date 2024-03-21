@@ -279,7 +279,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					return
 				}
 
-				err = serverConn.Request(1027, responseGenericInfo)
+				_, err = serverConn.Execute(1027, responseGenericInfo)
 				if err != nil {
 					fmt.Println("Request:", err)
 					return
@@ -404,6 +404,10 @@ func receiveGenericServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 		return
 	}
 
+	if serverInfo.Busy {
+		return
+	}
+
 	_, err = u.Write(u.Raddr, 1025, []byte(addrStr))
 	if err != nil {
 		err = fmt.Errorf("UdpWrite: %s", err)
@@ -428,7 +432,7 @@ func receiveGenericDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 		data.Time = time
 		data.GenericInfo = deviceInfo
 		deviceStorage[deviceInfo.Mac] = data
-		if data.ToConnTCP {
+		if data.ToConnTCP && !deviceInfo.Busy {
 			_, err = u.Write(u.Raddr, 1025, []byte(addrStr))
 			if err != nil {
 				err = fmt.Errorf("UdpWrite: %s", err)
