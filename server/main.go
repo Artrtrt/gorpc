@@ -136,7 +136,7 @@ func main() {
 	}
 
 	defer tcpLr.Close()
-	configureTcp(tcpLr)
+	tcpLr.HandleFunc(1, remoteErr)
 	go acceptTcp(tcpLr)
 	hubUDPAddr, err = net.ResolveUDPAddr("udp", "localhost:2000")
 	if err != nil {
@@ -192,9 +192,8 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			for {
 				err = conn.Update(time.Second * 60)
 				if err != nil {
-					fmt.Println("trpc", err)
 					conn.Close()
-					fmt.Println("Отключился " + raddr)
+					fmt.Printf("Отключился %s. Ошибка: %s \n", addr, err.Error())
 					break
 				}
 			}
@@ -221,7 +220,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 
 			conn.Codec = tagrpc.NewRsaCodec(privateKey, clientPublicKey)
 
-			response, err = conn.Execute(1028, []byte{})
+			response, err = conn.Execute(3, []byte{})
 			if err != nil {
 				fmt.Println("Execute", err)
 				return
@@ -234,6 +233,14 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
+			_, ok := wantToConnectStorage[genericInfo.Mac]
+			if !ok {
+				conn.Write(1, []byte("Unknown device"))
+				conn.Close()
+				return
+			}
+
+			delete(wantToConnectStorage, genericInfo.Mac)
 			listener, err := net.Listen("tcp", "localhost:0")
 			if err != nil {
 				fmt.Println("Ошибка при открытии порта:", err)
@@ -242,16 +249,10 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			defer listener.Close()
 
 			port := listener.Addr().(*net.TCPAddr).Port
-			go httpServer(port, raddr)
+			httpServer(port, raddr)
 
 		}(conn)
 	}
-}
-
-func configureTcp(lr *tagrpc.TCPListener) {
-	lr.HandleFunc(1, remoteErr)
-	lr.HandleFunc(1027, receiveDeviceInfo)
-	lr.HandleFunc(3074, acceptDevice)
 }
 
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -275,29 +276,11 @@ func receiveDeviceInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	return
 }
 
-func acceptDevice(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	var deviceInfo typedef.GenericInfo
-	err = xbyte.ByteToStruct(val, &deviceInfo)
-	if err != nil {
-		err = fmt.Errorf("ByteToStruct: %s", err)
-		return
-	}
-
-	_, ok := wantToConnectStorage[deviceInfo.Mac]
-	if !ok {
-		fmt.Println("Такого нет")
-		n.Close()
-		return
-	}
-
-	fmt.Println("Все норм")
-	return
-}
-
 func configureTcpForHub(conn *tagrpc.TCPConn) {
 	conn.HandleFunc(1, remoteErr)
 	conn.HandleFunc(2, rsaSetup)
-	conn.HandleFunc(1028, sendGenericInfo)
+	conn.HandleFunc(3, sendGenericInfo)
+	conn.HandleFunc(1027, receiveDeviceInfo)
 	conn.HandleFunc(1029, sendServerInfo)
 }
 
@@ -331,7 +314,7 @@ func sendGenericInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	err = n.Response(1028, telemetry)
+	err = n.Response(3, telemetry)
 	if err != nil {
 		err = fmt.Errorf("%s %s", "Response:", err)
 		return

@@ -63,8 +63,8 @@ func main() {
 func configureTcp(conn *tagrpc.TCPConn) {
 	conn.HandleFunc(1, remoteErr)
 	conn.HandleFunc(2, rsaSetup)
+	conn.HandleFunc(3, sendGenericInfo)
 	conn.HandleFunc(1026, connectToServer)
-	conn.HandleFunc(1028, sendGenericInfo)
 }
 
 func rsaSetup(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -87,6 +87,22 @@ func rsaSetup(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	}
 
 	n.Codec = tagrpc.NewRsaCodec(privateKey, rPublicKey)
+	return
+}
+
+func sendGenericInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	telemetry, err := xbyte.StructToByte(info)
+	if err != nil {
+		err = fmt.Errorf("StructToByte: %s", err)
+		return
+	}
+
+	err = n.Response(3, telemetry)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "Response:", err)
+		return
+	}
+
 	return
 }
 
@@ -116,22 +132,6 @@ func connectToServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 			return
 		}
 	}
-}
-
-func sendGenericInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	telemetry, err := xbyte.StructToByte(info)
-	if err != nil {
-		err = fmt.Errorf("StructToByte: %s", err)
-		return
-	}
-
-	err = n.Response(1028, telemetry)
-	if err != nil {
-		err = fmt.Errorf("%s %s", "Response:", err)
-		return
-	}
-
-	return
 }
 
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
