@@ -29,6 +29,7 @@ func NewServer(addr [32]byte, connectionLimit uint32, info *typedef.GenericInfo)
 }
 
 var (
+	SN     string = "014223586595611"
 	err    error
 	server *Server
 
@@ -36,8 +37,8 @@ var (
 	publicKey  *rsa.PublicKey
 
 	addr                 string = "localhost:8083"
-	mac                  string = "AB:15:31:AA:93:27"
 	hubUDPAddr           *net.UDPAddr
+	hubConn              *tagrpc.TCPConn
 	wantToConnectStorage = make(map[[32]byte]typedef.GenericInfo)
 )
 
@@ -58,56 +59,6 @@ func handleRPC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Write(byteResponse)
-}
-
-func httpServer(port int, raddr string) {
-	// ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	// if err != nil {
-	// 	fmt.Println("Listen:", err)
-	// 	return
-	// }
-
-	// http.FileServer(http.Dir("./dist"))
-	// fmt.Println("Веб интерфейс:", ln.Addr())
-	// err = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	request, err := io.ReadAll(r.Body)
-	// 	if err != nil {
-	// 		http.Error(w, err.Error(), http.StatusBadRequest)
-	// 		return
-	// 	}
-
-	// 	response, err := conn.Execute(1000, request)
-	// 	if err != nil {
-	// 		http.Error(w, err.Error(), http.StatusBadRequest)
-	// 		return
-	// 	}
-
-	// 	w.Write(response)
-	// }))
-
-	// if err != nil {
-	// 	fmt.Println("Serve:", err)
-	// 	return
-	// }
-	fmt.Println(port)
-	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.Dir("./dist")))
-	http.ListenAndServe(fmt.Sprintf(":%d", port), mux)
-	// http.ListenAndServe(httpAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	request, err := io.ReadAll(r.Body)
-	// 	if err != nil {
-	// 		http.Error(w, err.Error(), http.StatusBadRequest)
-	// 		return
-	// 	}
-
-	// 	response, err := conn.Execute(1000, request)
-	// 	if err != nil {
-	// 		http.Error(w, err.Error(), http.StatusBadRequest)
-	// 		return
-	// 	}
-
-	// 	w.Write(response)
-	// }))
 }
 
 func main() {
@@ -151,11 +102,11 @@ func main() {
 	}
 
 	go configureUdp(udp)
-	macBytes := [32]byte{}
+	SNBytes := [32]byte{}
 	addrBytes := [32]byte{}
-	copy(macBytes[:], []byte(mac))
+	copy(SNBytes[:], []byte(SN))
 	copy(addrBytes[:], []byte(addr))
-	serverInfo := &typedef.GenericInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
+	serverInfo := &typedef.GenericInfo{SN: SNBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
 	server = NewServer(addrBytes, 100, serverInfo)
 
 	for {
@@ -188,7 +139,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 		raddr := conn.Tcp.RemoteAddr().String()
 		fmt.Println("Подключился ", raddr)
 
-		go func(conn *tagrpc.TCPConn) {
+		go func(*tagrpc.TCPConn) {
 			for {
 				err = conn.Update(time.Second * 60)
 				if err != nil {
@@ -199,7 +150,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			}
 		}(conn)
 
-		go func(conn *tagrpc.TCPConn) {
+		go func(*tagrpc.TCPConn) {
 			dst, err := xbyte.RsaPublicToByte(publicKey)
 			if err != nil {
 				fmt.Println("RsaPublicToByte", err)
@@ -233,23 +184,19 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
-			_, ok := wantToConnectStorage[genericInfo.Mac]
+			_, ok := wantToConnectStorage[genericInfo.SN]
 			if !ok {
 				conn.Write(1, []byte("Unknown device"))
 				conn.Close()
 				return
 			}
 
-			delete(wantToConnectStorage, genericInfo.Mac)
-			listener, err := net.Listen("tcp", "localhost:0")
+			delete(wantToConnectStorage, genericInfo.SN)
+			err = hubConn.Request(2051, response)
 			if err != nil {
-				fmt.Println("Ошибка при открытии порта:", err)
+				fmt.Println("Request", err)
 				return
 			}
-			defer listener.Close()
-
-			port := listener.Addr().(*net.TCPAddr).Port
-			httpServer(port, raddr)
 
 		}(conn)
 	}
@@ -267,9 +214,9 @@ func receiveDeviceInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	_, ok := wantToConnectStorage[deviceInfo.Mac]
+	_, ok := wantToConnectStorage[deviceInfo.SN]
 	if !ok {
-		wantToConnectStorage[deviceInfo.Mac] = deviceInfo
+		wantToConnectStorage[deviceInfo.SN] = deviceInfo
 	}
 
 	err = n.Response(1027, []byte("OK"))
@@ -368,56 +315,28 @@ func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	conn, err := tagrpc.DialTCP(nil, hubAddr)
+	hubConn, err = tagrpc.DialTCP(nil, hubAddr)
 	if err != nil {
 		err = fmt.Errorf("DialTCP: %s", err)
 		return
 	}
 
-	configureTcpForHub(conn)
+	configureTcpForHub(hubConn)
 	fmt.Println("Подключился к хабу")
-	server.Info.Busy = true
 	go func(*tagrpc.TCPConn) {
+		server.Info.Busy = true
 		defer func() {
 			server.Info.Busy = false
 		}()
+
 		for {
-			err = conn.Update(time.Second * 60)
+			err = hubConn.Update(time.Second * 60)
 			if err != nil {
 				fmt.Println("trpc:", err)
 				return
 			}
 		}
-	}(conn)
+	}(hubConn)
 
 	return
 }
-
-// dir, _ := os.Open("./dist")
-// defer dir.Close()
-// files, err := dir.Readdir(-1)
-// if err != nil {
-// 	fmt.Println(err)
-// 	return
-// }
-
-// var fileName string
-// for _, file := range files {
-// 	match, err := regexp.MatchString("app\\.*\\.js", file.Name())
-// 	if err != nil {
-// 		fmt.Println(err)
-// 		return
-// 	}
-
-// 	if match {
-// 		fileName = file.Name()
-// 	}
-// }
-
-// byteContent, err := ioutil.ReadFile(fmt.Sprintf("./dist/js/%s", fileName))
-// if err != nil {
-// 	fmt.Println(err)
-// 	return
-// }
-
-// fmt.Sprintf(string(byteContent), raddr)

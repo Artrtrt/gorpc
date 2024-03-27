@@ -3,7 +3,7 @@ package typedef
 import "errors"
 
 type GenericInfo struct {
-	Mac    [32]byte
+	SN     [32]byte
 	Uptime int64
 	Busy   bool
 }

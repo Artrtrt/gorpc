@@ -15,6 +15,7 @@ import (
 )
 
 var (
+	SN   string = "014223586595610"
 	err  error
 	info typedef.GenericInfo
 
@@ -52,9 +53,9 @@ func main() {
 	defer udp.Close()
 	go configureUdp(udp)
 
-	macBytes := [32]byte{}
-	copy(macBytes[:], []byte("AB:15:31:AA:93:26"))
-	deviceInfo := typedef.GenericInfo{Mac: macBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
+	SNBytes := [32]byte{}
+	copy(SNBytes[:], []byte(SN))
+	deviceInfo := typedef.GenericInfo{SN: SNBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
 	info = deviceInfo
 	sendData(udp, info)
 }
@@ -135,7 +136,7 @@ func connectToServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	go func(conn *tagrpc.TCPConn) {
+	go func(*tagrpc.TCPConn) {
 		info.Busy = true
 		defer func() {
 			info.Busy = false
@@ -188,7 +189,7 @@ func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
 
 	configureTcp(conn)
 	fmt.Println("Подключился к хабу")
-	go func(conn *tagrpc.TCPConn) {
+	go func(*tagrpc.TCPConn) {
 		for {
 			err = conn.Update(time.Second * 100)
 			if err != nil {

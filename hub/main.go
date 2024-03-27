@@ -28,14 +28,15 @@ type DevicePayload struct {
 	Time        int64
 	SentToDB    bool
 	ToConnTCP   bool
+	HttpChan    chan string
 }
 
 type DeviceStorage map[[32]byte]DevicePayload
 
 // FIXIT
-func (s DeviceStorage) Contains(mac [32]byte) bool {
+func (s DeviceStorage) Contains(SN [32]byte) bool {
 	for _, payload := range s {
-		if payload.GenericInfo.Mac == mac {
+		if payload.GenericInfo.SN == SN {
 			return true
 		}
 	}
@@ -51,9 +52,9 @@ type ServerPayload struct {
 type ServerStorage map[*tagrpc.TCPConn]ServerPayload
 
 // FIXIT
-func (s ServerStorage) Contains(mac [32]byte) bool {
+func (s ServerStorage) Contains(SN [32]byte) bool {
 	for _, payload := range s {
-		if payload.GenericInfo.Mac == mac {
+		if payload.GenericInfo.SN == SN {
 			return true
 		}
 	}
@@ -84,7 +85,7 @@ var (
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 
-	addrStr  string = "localhost:8080"
+	addr     string = "localhost:8080"
 	httpAddr string = ":8081"
 
 	serverList    []string
@@ -96,33 +97,33 @@ func httpServer() {
 	http.HandleFunc("/hub", func(rw http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
-			mac := r.FormValue("mac")
-			if mac == "" {
-				fmt.Fprint(rw, "Mac адрес не может быть пустым")
+			SN := r.FormValue("SN")
+			if SN == "" {
+				fmt.Fprint(rw, "SN не может быть пустым")
 				return
 			}
 
-			macBytes := [32]byte{}
-			copy(macBytes[:], []byte(mac))
-			_, ok := deviceStorage[macBytes]
+			SNBytes := [32]byte{}
+			copy(SNBytes[:], []byte(SN))
+			_, ok := deviceStorage[SNBytes]
 			if !ok {
 				fmt.Fprint(rw, "Запрашиваемое устройство не найдено")
 				return
 			}
 
-			device := deviceStorage[macBytes]
+			device := deviceStorage[SNBytes]
 			if time.Now().Unix()-device.Time > 120 {
 				fmt.Fprint(rw, "Устройство не доступно")
 				return
 			}
 
-			payload := deviceStorage[macBytes]
+			payload := deviceStorage[SNBytes]
 			if payload.ToConnTCP {
 				fmt.Fprint(rw, "Устройство занято")
 				return
 			} else {
 				payload.ToConnTCP = true
-				deviceStorage[macBytes] = payload
+				deviceStorage[SNBytes] = payload
 			}
 		case http.MethodGet:
 			fmt.Println("hello")
@@ -179,7 +180,7 @@ func main() {
 	go httpServer()
 	fmt.Println("Слухает")
 
-	tcpAddr, err := net.ResolveTCPAddr("tcp", addrStr)
+	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		fmt.Println("ResolveTCPAddr", err)
 		return
@@ -206,7 +207,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 		}
 		addr := conn.Tcp.RemoteAddr().String()
 		fmt.Println("Подключился " + addr)
-		go func(conn *tagrpc.TCPConn) {
+		go func(*tagrpc.TCPConn) {
 			for {
 				err = conn.Update(time.Second * 60)
 				if err != nil {
@@ -221,7 +222,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			}
 		}(conn)
 
-		go func(conn *tagrpc.TCPConn) {
+		go func(*tagrpc.TCPConn) {
 			dst, err := xbyte.RsaPublicToByte(publicKey)
 			if err != nil {
 				fmt.Println("RsaPublicToByte", err)
@@ -255,8 +256,8 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
-			if contains(serverList, byteArrToString(genericInfo.Mac[:])) {
-				if serverStorage.Contains(genericInfo.Mac) {
+			if contains(serverList, byteArrToString(genericInfo.SN[:])) {
+				if serverStorage.Contains(genericInfo.SN) {
 					return
 				}
 
@@ -271,7 +272,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					}
 					time.Sleep(time.Second * 20)
 				}
-			} else if deviceStorage.Contains(genericInfo.Mac) {
+			} else if deviceStorage.Contains(genericInfo.SN) {
 				serverConn, serverAddr, err := serverStorage.lessBusyServer()
 				if err != nil {
 					conn.Request(1, []byte(err.Error()))
@@ -341,11 +342,11 @@ func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 // 		return
 // 	}
 
-// 	if !contains(serverList, byteArrToString(serverInfo.Mac[:])) {
+// 	if !contains(serverList, byteArrToString(serverInfo.SN[:])) {
 // 		n.Close()
 // 	}
 
-// 	if serverStorageContains(serverStorage, serverInfo.Mac) {
+// 	if serverStorageContains(serverStorage, serverInfo.SN) {
 // 		n.Write(1, []byte("Device already connect"))
 // 		return
 // 	}
@@ -368,7 +369,10 @@ func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	fmt.Println("Сообщить клиенту адрес куда подключаться")
+	str := MagicSNTransform(byteArrToString(deviceInfo.SN[:]))
+
+	fmt.Println(str)
+	deviceStorage[deviceInfo.SN].HttpChan <- str
 	return
 }
 
@@ -399,7 +403,7 @@ func receiveGenericServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	if !contains(serverList, byteArrToString(serverInfo.Mac[:])) {
+	if !contains(serverList, byteArrToString(serverInfo.SN[:])) {
 		_, err = u.Write(u.Raddr, 1, []byte("Unknown device"))
 		return
 	}
@@ -408,7 +412,7 @@ func receiveGenericServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	_, err = u.Write(u.Raddr, 1025, []byte(addrStr))
+	_, err = u.Write(u.Raddr, 1025, []byte(addr))
 	if err != nil {
 		err = fmt.Errorf("UdpWrite: %s", err)
 		return
@@ -426,30 +430,31 @@ func receiveGenericDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 	}
 
 	time := time.Now().Unix()
-	_, ok := deviceStorage[deviceInfo.Mac]
+	_, ok := deviceStorage[deviceInfo.SN]
 	if ok {
-		data := deviceStorage[deviceInfo.Mac]
+		data := deviceStorage[deviceInfo.SN]
 		data.Time = time
 		data.GenericInfo = deviceInfo
-		deviceStorage[deviceInfo.Mac] = data
+		deviceStorage[deviceInfo.SN] = data
 		if data.ToConnTCP && !deviceInfo.Busy {
-			_, err = u.Write(u.Raddr, 1025, []byte(addrStr))
+			_, err = u.Write(u.Raddr, 1025, []byte(addr))
 			if err != nil {
 				err = fmt.Errorf("UdpWrite: %s", err)
 				return
 			}
 		}
-		// fmt.Printf("Данные о роутере %s обновились\n", string(deviceInfo.Mac[:]))
+		// fmt.Printf("Данные о роутере %s обновились\n", string(deviceInfo.SN[:]))
 	} else {
-		deviceStorage[deviceInfo.Mac] = DevicePayload{
-			deviceInfo, time, false, false,
+		deviceStorage[deviceInfo.SN] = DevicePayload{
+			deviceInfo, time, false, false, make(chan string, 1),
 		}
-		// fmt.Printf("Роутер %s добавлен\n", deviceInfo.Mac)
+		// fmt.Printf("Роутер %s добавлен\n", deviceInfo.SN)
 	}
 
 	return
 }
 
+// Вынести в utils
 func byteArrToString(arr []byte) string {
 	return string(bytes.TrimRightFunc(arr, func(r rune) bool {
 		return r == 0
@@ -463,4 +468,12 @@ func contains(arr []string, str string) bool {
 		}
 	}
 	return false
+}
+
+func MagicSNTransform(SN string) string {
+	runes := []rune(SN)
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+	return string(runes)
 }
