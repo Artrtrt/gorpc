@@ -15,6 +15,7 @@ import (
 	"tag"
 	"time"
 
+	"gopack/jsonrpc"
 	"gopack/tagrpc"
 	"gopack/xbyte"
 	"rsautil"
@@ -93,45 +94,63 @@ var (
 	serverStorage = ServerStorage{}
 )
 
-func httpServer() {
-	http.HandleFunc("/hub", func(rw http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost:
-			SN := r.FormValue("SN")
-			if SN == "" {
-				fmt.Fprint(rw, "SN не может быть пустым")
-				return
-			}
+func handleCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-			SNBytes := [32]byte{}
-			copy(SNBytes[:], []byte(SN))
-			_, ok := deviceStorage[SNBytes]
-			if !ok {
-				fmt.Fprint(rw, "Запрашиваемое устройство не найдено")
-				return
-			}
-
-			device := deviceStorage[SNBytes]
-			if time.Now().Unix()-device.Time > 120 {
-				fmt.Fprint(rw, "Устройство не доступно")
-				return
-			}
-
-			payload := deviceStorage[SNBytes]
-			if payload.ToConnTCP {
-				fmt.Fprint(rw, "Устройство занято")
-				return
-			} else {
-				payload.ToConnTCP = true
-				deviceStorage[SNBytes] = payload
-			}
-		case http.MethodGet:
-			fmt.Println("hello")
-		default:
-			http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
 		}
+
+		next.ServeHTTP(w, r)
 	})
-	http.ListenAndServe(httpAddr, nil)
+}
+
+func httpServer() {
+	server := jsonrpc.NewServer()
+	var req, resp string
+	server.HandleFunc("sendSN", receiveSN, req, resp)
+	mux := http.NewServeMux()
+	mux.Handle("/hub", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		server.ServeHTTP(rw, r)
+	})))
+
+	http.ListenAndServe(httpAddr, mux)
+}
+
+func receiveSN(req interface{}) (resp interface{}, err error) {
+	if req == "" {
+		err = errors.New("SN не может быть пустым")
+		return
+	}
+
+	SNBytes := [32]byte{}
+	copy(SNBytes[:], []byte(req.(string)))
+	_, ok := deviceStorage[SNBytes]
+	if !ok {
+		resp = "Запрашиваемое устройство не найдено"
+		return
+	}
+
+	device := deviceStorage[SNBytes]
+	if time.Now().Unix()-device.Time > 120 {
+		resp = "Устройство не доступно"
+		return
+	}
+
+	payload := deviceStorage[SNBytes]
+	if payload.ToConnTCP {
+		resp = "Устройство занято"
+		return
+	} else {
+		payload.ToConnTCP = true
+		deviceStorage[SNBytes] = payload
+	}
+	time.Sleep(time.Second * 5)
+	return
 }
 
 func main() {
@@ -333,33 +352,6 @@ func configureTcpForServer(conn *tagrpc.TCPConn) {
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	return errors.New(fmt.Sprint("remoteErr:", string(val)))
 }
-
-// func acceptServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-// 	serverInfo := typedef.GenericInfo{}
-// 	err = xbyte.ByteToStruct(val, &serverInfo)
-// 	if err != nil {
-// 		err = fmt.Errorf("ByteToStruct: %s", err)
-// 		return
-// 	}
-
-// 	if !contains(serverList, byteArrToString(serverInfo.SN[:])) {
-// 		n.Close()
-// 	}
-
-// 	if serverStorageContains(serverStorage, serverInfo.SN) {
-// 		n.Write(1, []byte("Device already connect"))
-// 		return
-// 	}
-
-// 	resp, err := n.Execute(1029, nil)
-// 	if err != nil {
-// 		err = fmt.Errorf("execute: %s", err)
-// 		return
-// 	}
-
-// 	fmt.Println(resp)
-// 	return
-// }
 
 func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	deviceInfo := typedef.GenericInfo{}

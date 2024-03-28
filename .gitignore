@@ -4,4 +4,4 @@
 *.db
 *.sql
 *.exe
-dist
+static
