@@ -25,11 +25,11 @@ import (
 )
 
 type DevicePayload struct {
-	GenericInfo typedef.GenericInfo
-	Time        int64
-	SentToDB    bool
-	ToConnTCP   bool
-	HttpChan    chan string
+	GenericInfo  typedef.GenericInfo
+	Time         int64
+	SentToDB     bool
+	ToConnTCP    bool
+	HttpAddrChan chan string
 }
 
 type DeviceStorage map[[32]byte]DevicePayload
@@ -87,7 +87,7 @@ var (
 	publicKey  *rsa.PublicKey
 
 	addr     string = "localhost:8080"
-	httpAddr string = ":8081"
+	httpAddr string = "localhost:8081"
 
 	serverList    []string
 	deviceStorage = DeviceStorage{}
@@ -109,13 +109,30 @@ func handleCORS(next http.Handler) http.Handler {
 	})
 }
 
+// func handle(next http.Handler) http.Handler {
+// 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// 		http.StripPrefix("/hub/", http.FileServer(http.Dir("./static/hub")))
+// 		next.ServeHTTP(w, r)
+// 	})
+// }
+
 func httpServer() {
 	server := jsonrpc.NewServer()
 	var req, resp string
 	server.HandleFunc("sendSN", receiveSN, req, resp)
 	mux := http.NewServeMux()
-	mux.Handle("/hub", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		server.ServeHTTP(rw, r)
+	mux.Handle("/hub/", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			server.ServeHTTP(rw, r)
+		}
+
+		if r.Method == http.MethodGet {
+			http.StripPrefix("/hub/", http.FileServer(http.Dir("./static/hub"))).ServeHTTP(rw, r)
+		}
+	})))
+
+	mux.Handle("/api/ubus/", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		http.StripPrefix("/api/ubus/", http.FileServer(http.Dir("./static/webui"))).ServeHTTP(rw, r)
 	})))
 
 	http.ListenAndServe(httpAddr, mux)
@@ -131,25 +148,32 @@ func receiveSN(req interface{}) (resp interface{}, err error) {
 	copy(SNBytes[:], []byte(req.(string)))
 	_, ok := deviceStorage[SNBytes]
 	if !ok {
-		resp = "Запрашиваемое устройство не найдено"
+		err = errors.New("запрашиваемое устройство не найдено")
 		return
 	}
 
 	device := deviceStorage[SNBytes]
 	if time.Now().Unix()-device.Time > 120 {
-		resp = "Устройство не доступно"
+		err = errors.New("устройство не доступно")
 		return
 	}
 
 	payload := deviceStorage[SNBytes]
 	if payload.ToConnTCP {
-		resp = "Устройство занято"
+		err = errors.New("устройство занято")
 		return
 	} else {
 		payload.ToConnTCP = true
 		deviceStorage[SNBytes] = payload
 	}
-	time.Sleep(time.Second * 5)
+
+	select {
+	case <-time.After(time.Second * 120):
+		err = errors.New("устройство не доступно")
+		return
+	case resp = <-deviceStorage[SNBytes].HttpAddrChan:
+	}
+
 	return
 }
 
@@ -361,10 +385,9 @@ func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	str := MagicSNTransform(byteArrToString(deviceInfo.SN[:]))
-
-	fmt.Println(str)
-	deviceStorage[deviceInfo.SN].HttpChan <- str
+	SN := MagicSNTransform(byteArrToString(deviceInfo.SN[:]))
+	addr := "http://" + httpAddr + "/api/ubus/" + "?SN=" + SN + "&endpoint=http://localhost:8084"
+	deviceStorage[deviceInfo.SN].HttpAddrChan <- addr
 	return
 }
 
