@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
@@ -21,11 +22,23 @@ type Server struct {
 	Info    *typedef.GenericInfo
 }
 
-func NewServer(addr [32]byte, connectionLimit uint32, info *typedef.GenericInfo) *Server {
+func NewServer(addr [16]byte, connectionLimit uint32, info *typedef.GenericInfo) *Server {
 	return &Server{
 		Control: typedef.NewServerInfoControl(addr, connectionLimit),
 		Info:    info,
 	}
+}
+
+type ConnectStorage map[*tagrpc.TCPConn]string
+
+func (s ConnectStorage) Find(SN string) *tagrpc.TCPConn {
+	for conn, val := range s {
+		if val == SN {
+			return conn
+		}
+	}
+
+	return nil
 }
 
 var (
@@ -37,12 +50,14 @@ var (
 	publicKey  *rsa.PublicKey
 
 	addr                 string = "localhost:8083"
+	httpAddr             string = "localhost:8084"
 	hubUDPAddr           *net.UDPAddr
 	hubConn              *tagrpc.TCPConn
-	wantToConnectStorage = make(map[[32]byte]typedef.GenericInfo)
+	wantToConnectStorage = make(map[[16]byte]typedef.GenericInfo)
+	connectStorage       = ConnectStorage{}
 )
 
-func handleRPC(w http.ResponseWriter, r *http.Request) {
+func executeRPC(w http.ResponseWriter, r *http.Request) {
 	var request jsonrpc.Request
 	err := json.NewDecoder(r.Body).Decode(&request)
 	if err != nil {
@@ -59,6 +74,56 @@ func handleRPC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Write(byteResponse)
+}
+
+func handleCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, SN")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func httpServer() {
+	http.Handle("/", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		magic := r.Header.Get("SN")
+		if SN == "" {
+			rw.Write([]byte("SN не должен быть пустым"))
+			return
+		}
+
+		SN := MagicSNTransform(magic)
+		conn := connectStorage.Find(SN)
+		if conn == nil {
+			rw.Write([]byte("Устройство не найдено"))
+			return
+		}
+
+		var buf []byte
+		_, err = r.Body.Read(buf)
+		if err != nil {
+			rw.Write([]byte(err.Error()))
+			return
+		}
+
+		fmt.Println(r)
+
+		resp, err := conn.Execute(2053, buf)
+		if err != nil {
+			rw.Write([]byte(err.Error()))
+			return
+		}
+
+		rw.Write(resp)
+	})))
+	http.ListenAndServe(httpAddr, nil)
 }
 
 func main() {
@@ -89,6 +154,7 @@ func main() {
 	defer tcpLr.Close()
 	tcpLr.HandleFunc(1, remoteErr)
 	go acceptTcp(tcpLr)
+	go httpServer()
 	hubUDPAddr, err = net.ResolveUDPAddr("udp", "localhost:2000")
 	if err != nil {
 		fmt.Println("ResolveUDPAddr:", err)
@@ -102,8 +168,8 @@ func main() {
 	}
 
 	go configureUdp(udp)
-	SNBytes := [32]byte{}
-	addrBytes := [32]byte{}
+	SNBytes := [16]byte{}
+	addrBytes := [16]byte{}
 	copy(SNBytes[:], []byte(SN))
 	copy(addrBytes[:], []byte(addr))
 	serverInfo := &typedef.GenericInfo{SN: SNBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
@@ -144,6 +210,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				err = conn.Update(time.Second * 60)
 				if err != nil {
 					conn.Close()
+					delete(connectStorage, conn)
 					fmt.Printf("Отключился %s. Ошибка: %s \n", addr, err.Error())
 					break
 				}
@@ -192,6 +259,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			}
 
 			delete(wantToConnectStorage, genericInfo.SN)
+			connectStorage[conn] = byteArrToString(genericInfo.SN[:])
 			err = hubConn.Request(2051, response)
 			if err != nil {
 				fmt.Println("Request", err)
@@ -339,4 +407,19 @@ func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
 	}(hubConn)
 
 	return
+}
+
+// Вынести в utils
+func byteArrToString(arr []byte) string {
+	return string(bytes.TrimRightFunc(arr, func(r rune) bool {
+		return r == 0
+	}))
+}
+
+func MagicSNTransform(SN string) string {
+	runes := []rune(SN)
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+	return string(runes)
 }

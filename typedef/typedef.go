@@ -3,13 +3,13 @@ package typedef
 import "errors"
 
 type GenericInfo struct {
-	SN     [32]byte
+	SN     [16]byte
 	Uptime int64
 	Busy   bool
 }
 
 type ServerInfo struct {
-	Addr            [32]byte
+	Addr            [16]byte
 	ConnectionCount uint32
 	ConnectionLimit uint32
 }
@@ -47,7 +47,7 @@ func (sic *ServerInfoControl) ConnectionDec() error {
 	return nil
 }
 
-func NewServerInfoControl(addr [32]byte, connectionLimit uint32) *ServerInfoControl {
+func NewServerInfoControl(addr [16]byte, connectionLimit uint32) *ServerInfoControl {
 	return &ServerInfoControl{
 		connection: make(chan interface{}, 1),
 		ServerInfo: ServerInfo{

@@ -53,7 +53,7 @@ func main() {
 	defer udp.Close()
 	go configureUdp(udp)
 
-	SNBytes := [32]byte{}
+	SNBytes := [16]byte{}
 	copy(SNBytes[:], []byte(SN))
 	deviceInfo := typedef.GenericInfo{SN: SNBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
 	info = deviceInfo

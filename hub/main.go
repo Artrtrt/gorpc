@@ -32,10 +32,10 @@ type DevicePayload struct {
 	HttpAddrChan chan string
 }
 
-type DeviceStorage map[[32]byte]DevicePayload
+type DeviceStorage map[[16]byte]DevicePayload
 
 // FIXIT
-func (s DeviceStorage) Contains(SN [32]byte) bool {
+func (s DeviceStorage) Contains(SN [16]byte) bool {
 	for _, payload := range s {
 		if payload.GenericInfo.SN == SN {
 			return true
@@ -53,7 +53,7 @@ type ServerPayload struct {
 type ServerStorage map[*tagrpc.TCPConn]ServerPayload
 
 // FIXIT
-func (s ServerStorage) Contains(SN [32]byte) bool {
+func (s ServerStorage) Contains(SN [16]byte) bool {
 	for _, payload := range s {
 		if payload.GenericInfo.SN == SN {
 			return true
@@ -63,7 +63,7 @@ func (s ServerStorage) Contains(SN [32]byte) bool {
 	return false
 }
 
-func (s ServerStorage) lessBusyServer() (conn *tagrpc.TCPConn, addr [32]byte, err error) {
+func (s ServerStorage) lessBusyServer() (conn *tagrpc.TCPConn, addr [16]byte, err error) {
 	if len(s) == 0 {
 		err = fmt.Errorf("%s", "No servers")
 		return
@@ -97,8 +97,8 @@ var (
 func handleCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, SN")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -109,19 +109,12 @@ func handleCORS(next http.Handler) http.Handler {
 	})
 }
 
-// func handle(next http.Handler) http.Handler {
-// 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-// 		http.StripPrefix("/hub/", http.FileServer(http.Dir("./static/hub")))
-// 		next.ServeHTTP(w, r)
-// 	})
-// }
-
 func httpServer() {
 	server := jsonrpc.NewServer()
 	var req, resp string
 	server.HandleFunc("sendSN", receiveSN, req, resp)
 	mux := http.NewServeMux()
-	mux.Handle("/hub/", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+	mux.Handle("/hub/", http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			server.ServeHTTP(rw, r)
 		}
@@ -129,11 +122,11 @@ func httpServer() {
 		if r.Method == http.MethodGet {
 			http.StripPrefix("/hub/", http.FileServer(http.Dir("./static/hub"))).ServeHTTP(rw, r)
 		}
-	})))
+	}))
 
-	mux.Handle("/api/ubus/", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+	mux.Handle("/api/ubus/", http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		http.StripPrefix("/api/ubus/", http.FileServer(http.Dir("./static/webui"))).ServeHTTP(rw, r)
-	})))
+	}))
 
 	http.ListenAndServe(httpAddr, mux)
 }
@@ -144,23 +137,23 @@ func receiveSN(req interface{}) (resp interface{}, err error) {
 		return
 	}
 
-	SNBytes := [32]byte{}
+	SNBytes := [16]byte{}
 	copy(SNBytes[:], []byte(req.(string)))
 	_, ok := deviceStorage[SNBytes]
 	if !ok {
-		err = errors.New("запрашиваемое устройство не найдено")
+		err = errors.New("Запрашиваемое устройство не найдено")
 		return
 	}
 
 	device := deviceStorage[SNBytes]
 	if time.Now().Unix()-device.Time > 120 {
-		err = errors.New("устройство не доступно")
+		err = errors.New("Устройство не доступно")
 		return
 	}
 
 	payload := deviceStorage[SNBytes]
 	if payload.ToConnTCP {
-		err = errors.New("устройство занято")
+		err = errors.New("Устройство занято")
 		return
 	} else {
 		payload.ToConnTCP = true
@@ -169,7 +162,7 @@ func receiveSN(req interface{}) (resp interface{}, err error) {
 
 	select {
 	case <-time.After(time.Second * 120):
-		err = errors.New("устройство не доступно")
+		err = errors.New("Устройство не доступно")
 		return
 	case resp = <-deviceStorage[SNBytes].HttpAddrChan:
 	}
