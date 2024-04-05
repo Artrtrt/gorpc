@@ -9,6 +9,7 @@ import (
 	"gopack/jsonrpc"
 	"gopack/tagrpc"
 	"gopack/xbyte"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"rsautil"
@@ -106,14 +107,11 @@ func httpServer() {
 			return
 		}
 
-		var buf []byte
-		_, err = r.Body.Read(buf)
+		buf, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			rw.Write([]byte(err.Error()))
 			return
 		}
-
-		fmt.Println(r)
 
 		resp, err := conn.Execute(2053, buf)
 		if err != nil {
@@ -251,12 +249,12 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
-			_, ok := wantToConnectStorage[genericInfo.SN]
-			if !ok {
-				conn.Write(1, []byte("Unknown device"))
-				conn.Close()
-				return
-			}
+			_, _ = wantToConnectStorage[genericInfo.SN]
+			// if !ok {
+			// 	conn.Write(1, []byte("Unknown device"))
+			// 	conn.Close()
+			// 	return
+			// }
 
 			delete(wantToConnectStorage, genericInfo.SN)
 			connectStorage[conn] = byteArrToString(genericInfo.SN[:])

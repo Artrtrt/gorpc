@@ -5,13 +5,14 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
-	"gopack/tagrpc"
-	"gopack/xbyte"
 	"net"
 	"rsautil"
 	"tag"
 	"time"
 	"typedef"
+
+	"gopack/tagrpc"
+	"gopack/xbyte"
 )
 
 var (
@@ -38,6 +39,36 @@ func main() {
 		return
 	}
 
+	///-------------------------------------------
+	tcpAddr, err := net.ResolveTCPAddr("tcp", "localhost:8083")
+	if err != nil {
+		fmt.Println("ResolveTCPAddr:", err)
+		return
+	}
+
+	conn, err := tagrpc.DialTCP(nil, tcpAddr)
+	if err != nil {
+		fmt.Println("DialTCP:", err)
+		return
+	}
+
+	configureTcp(conn)
+	fmt.Printf("Подключился к серверу %s\n", conn.Tcp.RemoteAddr())
+	go func(*tagrpc.TCPConn) {
+		info.Busy = true
+		defer func() {
+			info.Busy = false
+		}()
+		for {
+			err = conn.Update(time.Second * 60)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+		}
+	}(conn)
+
+	///-------------------------------------------
 	hubUDPAddr, err = net.ResolveUDPAddr("udp", "localhost:2000")
 	if err != nil {
 		fmt.Println("ResolveUDPAddr:", err)
@@ -66,6 +97,11 @@ func configureTcp(conn *tagrpc.TCPConn) {
 	conn.HandleFunc(2, rsaSetup)
 	conn.HandleFunc(3, sendGenericInfo)
 	conn.HandleFunc(1026, connectToServer)
+	conn.HandleFunc(2053, executeJsonRPC)
+}
+
+func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	return errors.New(fmt.Sprint("remoteErr: ", string(val)))
 }
 
 func rsaSetup(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -153,8 +189,12 @@ func connectToServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	return
 }
 
-func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	return errors.New(fmt.Sprint("remoteErr: ", string(val)))
+func executeJsonRPC(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	val = bytes.TrimRightFunc(val, func(r rune) bool {
+		return r == 0
+	})
+
+	return
 }
 
 // UDP
