@@ -86,7 +86,8 @@ var (
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 
-	addr     string = "localhost:8080"
+	udpAddr  string = "192.168.1.150:2000"
+	tpcAddr  string = "192.168.1.150:8080"
 	httpAddr string = "localhost:8081"
 
 	serverList    []string
@@ -205,7 +206,7 @@ func main() {
 		os.Exit(1)
 	}()
 
-	udp, err := tag.NewUdp("localhost:2000")
+	udp, err := tag.NewUdp(udpAddr)
 	if err != nil {
 		fmt.Println("NewUdp:", err)
 		return
@@ -216,7 +217,7 @@ func main() {
 	go httpServer()
 	fmt.Println("Слухает")
 
-	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+	tcpAddr, err := net.ResolveTCPAddr("tcp", tpcAddr)
 	if err != nil {
 		fmt.Println("ResolveTCPAddr", err)
 		return
@@ -420,7 +421,7 @@ func receiveGenericServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	_, err = u.Write(u.Raddr, 1025, []byte(addr))
+	_, err = u.Write(u.Raddr, 1025, []byte(tpcAddr))
 	if err != nil {
 		err = fmt.Errorf("UdpWrite: %s", err)
 		return
@@ -445,7 +446,7 @@ func receiveGenericDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 		data.GenericInfo = deviceInfo
 		deviceStorage[deviceInfo.SN] = data
 		if data.ToConnTCP && !deviceInfo.Busy {
-			_, err = u.Write(u.Raddr, 1025, []byte(addr))
+			_, err = u.Write(u.Raddr, 1025, []byte(tpcAddr))
 			if err != nil {
 				err = fmt.Errorf("UdpWrite: %s", err)
 				return

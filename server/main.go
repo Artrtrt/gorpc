@@ -3,18 +3,17 @@ package main
 import (
 	"bytes"
 	"crypto/rsa"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"gopack/jsonrpc"
-	"gopack/tagrpc"
-	"gopack/xbyte"
 	"io/ioutil"
 	"net"
 	"net/http"
-	"rsautil"
 	"tag"
 	"time"
+
+	"gopack/tagrpc"
+	"gopack/xbyte"
+	"rsautil"
 	"typedef"
 )
 
@@ -50,32 +49,13 @@ var (
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 
-	addr                 string = "localhost:8083"
+	hubUDPAddr           string = "192.168.1.150:2000"
+	addr                 string = "192.168.1.150:8083"
 	httpAddr             string = "localhost:8084"
-	hubUDPAddr           *net.UDPAddr
 	hubConn              *tagrpc.TCPConn
 	wantToConnectStorage = make(map[[16]byte]typedef.GenericInfo)
 	connectStorage       = ConnectStorage{}
 )
-
-func executeRPC(w http.ResponseWriter, r *http.Request) {
-	var request jsonrpc.Request
-	err := json.NewDecoder(r.Body).Decode(&request)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	client := jsonrpc.NewClient(jsonrpc.NewClientTransportHttp("http://192.168.1.1/ubus"))
-	response := client.RawRequest(request)
-	byteResponse, err := json.Marshal(response)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	w.Write(byteResponse)
-}
 
 func handleCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +99,14 @@ func httpServer() {
 			return
 		}
 
-		rw.Write(resp)
+		_, err = rw.Write(bytes.TrimRightFunc(resp, func(r rune) bool {
+			return r == 0
+		}))
+
+		if err != nil {
+			rw.Write([]byte(err.Error()))
+			return
+		}
 	})))
 	http.ListenAndServe(httpAddr, nil)
 }
@@ -153,7 +140,7 @@ func main() {
 	tcpLr.HandleFunc(1, remoteErr)
 	go acceptTcp(tcpLr)
 	go httpServer()
-	hubUDPAddr, err = net.ResolveUDPAddr("udp", "localhost:2000")
+	UDPAddr, err := net.ResolveUDPAddr("udp", hubUDPAddr)
 	if err != nil {
 		fmt.Println("ResolveUDPAddr:", err)
 		return
@@ -180,7 +167,7 @@ func main() {
 			continue
 		}
 
-		_, err = udp.Write(hubUDPAddr, uint16(2049), info)
+		_, err = udp.Write(UDPAddr, uint16(2049), info)
 		if err != nil {
 			fmt.Println("UdpWrite:", err)
 			continue
@@ -263,7 +250,6 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				fmt.Println("Request", err)
 				return
 			}
-
 		}(conn)
 	}
 }

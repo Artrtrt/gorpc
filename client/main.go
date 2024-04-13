@@ -5,7 +5,9 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"rsautil"
 	"tag"
 	"time"
@@ -23,7 +25,7 @@ var (
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 
-	hubUDPAddr *net.UDPAddr
+	hubUDPAddr string = "192.168.1.150:2000"
 )
 
 func main() {
@@ -40,7 +42,7 @@ func main() {
 	}
 
 	///-------------------------------------------
-	tcpAddr, err := net.ResolveTCPAddr("tcp", "localhost:8083")
+	tcpAddr, err := net.ResolveTCPAddr("tcp", "192.168.1.150:8083")
 	if err != nil {
 		fmt.Println("ResolveTCPAddr:", err)
 		return
@@ -69,7 +71,7 @@ func main() {
 	}(conn)
 
 	///-------------------------------------------
-	hubUDPAddr, err = net.ResolveUDPAddr("udp", "localhost:2000")
+	UDPAddr, err := net.ResolveUDPAddr("udp", hubUDPAddr)
 	if err != nil {
 		fmt.Println("ResolveUDPAddr:", err)
 		return
@@ -88,7 +90,21 @@ func main() {
 	copy(SNBytes[:], []byte(SN))
 	deviceInfo := typedef.GenericInfo{SN: SNBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
 	info = deviceInfo
-	sendData(udp, info)
+	for {
+		telemetry, err := xbyte.StructToByte(deviceInfo)
+		if err != nil {
+			fmt.Println("StructToByte:", err)
+			continue
+		}
+
+		_, err = udp.Write(UDPAddr, uint16(3073), telemetry)
+		if err != nil {
+			fmt.Println("UdpWrite:", err)
+			continue
+		}
+		// fmt.Println(n)
+		time.Sleep(time.Second * 5)
+	}
 }
 
 // TCP
@@ -194,6 +210,20 @@ func executeJsonRPC(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 		return r == 0
 	})
 
+	body := bytes.NewReader(val)
+	resp, err := http.Post("http://localhost/ubus", "application/json", body)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "POST", err.Error())
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "ReadAll", err.Error())
+		return
+	}
+
+	n.Response(2053, bodyBytes)
 	return
 }
 
@@ -239,22 +269,4 @@ func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
 		}
 	}(conn)
 	return
-}
-
-func sendData(udp *tag.Udp, deviceInfo typedef.GenericInfo) {
-	for {
-		telemetry, err := xbyte.StructToByte(deviceInfo)
-		if err != nil {
-			fmt.Println("StructToByte:", err)
-			continue
-		}
-
-		_, err = udp.Write(hubUDPAddr, uint16(3073), telemetry)
-		if err != nil {
-			fmt.Println("UdpWrite:", err)
-			continue
-		}
-		// fmt.Println(n)
-		time.Sleep(time.Second * 5)
-	}
 }
