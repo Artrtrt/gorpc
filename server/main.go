@@ -17,18 +17,6 @@ import (
 	"typedef"
 )
 
-type Server struct {
-	Control *typedef.ServerInfoControl
-	Info    *typedef.GenericInfo
-}
-
-func NewServer(addr [16]byte, connectionLimit uint32, info *typedef.GenericInfo) *Server {
-	return &Server{
-		Control: typedef.NewServerInfoControl(addr, connectionLimit),
-		Info:    info,
-	}
-}
-
 type ConnectStorage map[*tagrpc.TCPConn]string
 
 func (s ConnectStorage) Find(SN string) *tagrpc.TCPConn {
@@ -44,13 +32,13 @@ func (s ConnectStorage) Find(SN string) *tagrpc.TCPConn {
 var (
 	SN     string = "014223586595611"
 	err    error
-	server *Server
+	server *typedef.Server
 
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 
 	hubUDPAddr           string = "192.168.1.150:2000"
-	addr                 string = "192.168.1.150:8083"
+	tcpAddr              string = "192.168.1.150:8083"
 	httpAddr             string = "localhost:8084"
 	hubConn              *tagrpc.TCPConn
 	wantToConnectStorage = make(map[[16]byte]typedef.GenericInfo)
@@ -124,13 +112,13 @@ func main() {
 		return
 	}
 
-	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+	addr, err := net.ResolveTCPAddr("tcp", tcpAddr)
 	if err != nil {
 		fmt.Println("ResolveTCPAddr:", err)
 		return
 	}
 
-	tcpLr, err := tagrpc.ListenTCP(tcpAddr)
+	tcpLr, err := tagrpc.ListenTCP(addr)
 	if err != nil {
 		fmt.Println("ListenTCP:", err)
 		return
@@ -154,11 +142,13 @@ func main() {
 
 	go configureUdp(udp)
 	SNBytes := [16]byte{}
-	addrBytes := [16]byte{}
+	tcpAddrBytes := [32]byte{}
+	httpAddrBytes := [32]byte{}
 	copy(SNBytes[:], []byte(SN))
-	copy(addrBytes[:], []byte(addr))
+	copy(tcpAddrBytes[:], []byte(tcpAddr))
+	copy(httpAddrBytes[:], []byte(httpAddr))
 	serverInfo := &typedef.GenericInfo{SN: SNBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
-	server = NewServer(addrBytes, 100, serverInfo)
+	server = typedef.NewServer(tcpAddrBytes, httpAddrBytes, 100, serverInfo)
 
 	for {
 		info, err := xbyte.StructToByte(server.Info)
@@ -196,7 +186,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				if err != nil {
 					conn.Close()
 					delete(connectStorage, conn)
-					fmt.Printf("Отключился %s. Ошибка: %s \n", addr, err.Error())
+					fmt.Printf("Отключился %s. Ошибка: %s \n", raddr, err.Error())
 					break
 				}
 			}
@@ -236,12 +226,12 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
-			_, _ = wantToConnectStorage[genericInfo.SN]
-			// if !ok {
-			// 	conn.Write(1, []byte("Unknown device"))
-			// 	conn.Close()
-			// 	return
-			// }
+			_, ok := wantToConnectStorage[genericInfo.SN]
+			if !ok {
+				conn.Write(1, []byte("Unknown device"))
+				conn.Close()
+				return
+			}
 
 			delete(wantToConnectStorage, genericInfo.SN)
 			connectStorage[conn] = byteArrToString(genericInfo.SN[:])
