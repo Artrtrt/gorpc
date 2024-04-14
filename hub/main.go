@@ -63,7 +63,7 @@ func (s ServerStorage) Contains(SN [16]byte) bool {
 	return false
 }
 
-func (s ServerStorage) lessBusyServer() (conn *tagrpc.TCPConn, addr [16]byte, err error) {
+func (s ServerStorage) lessBusyServer() (conn *tagrpc.TCPConn, addr [32]byte, err error) {
 	if len(s) == 0 {
 		err = fmt.Errorf("%s", "No servers")
 		return
@@ -162,7 +162,7 @@ func receiveSN(req interface{}) (resp interface{}, err error) {
 	}
 
 	select {
-	case <-time.After(time.Second * 120):
+	case <-time.After(time.Second * 20):
 		err = errors.New("Устройство не доступно")
 		return
 	case resp = <-deviceStorage[SNBytes].HttpAddrChan:
@@ -322,13 +322,17 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					fmt.Println("Request:", err)
 					return
 				}
-
+				fmt.Println("saga")
 				_, err = conn.Execute(1026, []byte(serverAddr[:]))
 				if err != nil {
 					fmt.Println("Execute:", err)
 					return
 				}
 
+				fmt.Println("gasgas")
+				tmp := deviceStorage[genericInfo.SN]
+				tmp.ToConnTCP = false
+				deviceStorage[genericInfo.SN] = tmp
 				conn.Close()
 			} else {
 				conn.Close()
@@ -337,22 +341,31 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 	}
 }
 
-func updateServerInfo(conn *tagrpc.TCPConn) (err error) {
-	_, ok := serverStorage[conn]
-	if !ok {
-		return errors.New("server not connect")
-	}
-
+func getServerInfo(conn *tagrpc.Node) (serverInfo typedef.ServerInfo, err error) {
 	response, err := conn.Execute(1029, []byte{})
 	if err != nil {
 		fmt.Println("Execute", err)
 		return
 	}
 
-	var serverInfo typedef.ServerInfo
 	err = xbyte.ByteToStruct(response, &serverInfo)
 	if err != nil {
 		fmt.Println("ByteToStruct:", err)
+		return
+	}
+
+	return
+}
+
+func updateServerInfo(conn *tagrpc.TCPConn) (err error) {
+	_, ok := serverStorage[conn]
+	if !ok {
+		return errors.New("server not connect")
+	}
+
+	serverInfo, err := getServerInfo(conn.Node)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "getServerInfo", err.Error())
 		return
 	}
 
@@ -380,7 +393,13 @@ func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	}
 
 	SN := MagicSNTransform(byteArrToString(deviceInfo.SN[:]))
-	addr := "http://" + httpAddr + "/api/ubus/" + "?SN=" + SN + "&endpoint=http://localhost:8084"
+	serverInfo, err := getServerInfo(n)
+	if err != nil {
+		err = fmt.Errorf("getServerInfo: %s", err)
+		return
+	}
+
+	addr := "http://" + httpAddr + "/api/ubus/" + "?SN=" + SN + "&endpoint=http://" + byteArrToString(serverInfo.HttpAddr[:])
 	deviceStorage[deviceInfo.SN].HttpAddrChan <- addr
 	return
 }
