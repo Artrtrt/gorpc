@@ -250,7 +250,6 @@ func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 
 func receiveDeviceInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	defer n.Response(1027, []byte("OK"))
-	fmt.Println("agsfd")
 	var deviceInfo typedef.GenericInfo
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {

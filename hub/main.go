@@ -302,7 +302,13 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 
 				serverStorage[conn] = ServerPayload{&genericInfo, nil}
 				configureTcpForServer(conn)
+				serverInfo, err := getServerInfo(conn)
+				if err != nil {
+					fmt.Println("GetServerInfo", err.Error())
+					return
+				}
 
+				conn.Storage["httpAddr"] = byteArrToString(serverInfo.HttpAddr[:])
 				for {
 					err = updateServerInfo(conn)
 					if err != nil {
@@ -319,7 +325,6 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					return
 				}
 
-				fmt.Println(serverConn)
 				_, err = serverConn.Execute(1027, responseGenericInfo)
 				if err != nil {
 					fmt.Println("Request:", err)
@@ -342,7 +347,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 	}
 }
 
-func getServerInfo(conn *tagrpc.Node) (serverInfo typedef.ServerInfo, err error) {
+func getServerInfo(conn *tagrpc.TCPConn) (serverInfo typedef.ServerInfo, err error) {
 	response, err := conn.Execute(1029, []byte{})
 	if err != nil {
 		fmt.Println("Execute", err)
@@ -364,7 +369,7 @@ func updateServerInfo(conn *tagrpc.TCPConn) (err error) {
 		return errors.New("server not connect")
 	}
 
-	serverInfo, err := getServerInfo(conn.Node)
+	serverInfo, err := getServerInfo(conn)
 	if err != nil {
 		err = fmt.Errorf("%s %s", "getServerInfo", err.Error())
 		return
@@ -393,13 +398,15 @@ func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	}
 
 	SN := MagicSNTransform(byteArrToString(deviceInfo.SN[:]))
-	serverInfo, err := getServerInfo(n)
+
+	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
-		err = fmt.Errorf("getServerInfo: %s", err)
+		err = fmt.Errorf("ByteToStruct: %s", err)
 		return
 	}
 
-	addr := "http://" + httpAddr + "/api/ubus/" + "?SN=" + SN + "&endpoint=http://" + byteArrToString(serverInfo.HttpAddr[:])
+	serverAddr := n.Storage["httpAddr"].(string)
+	addr := "http://" + httpAddr + "/api/ubus/" + "?SN=" + SN + "&endpoint=http://" + serverAddr
 	deviceStorage[deviceInfo.SN].HttpAddrChan <- addr
 	return
 }
