@@ -73,7 +73,7 @@ func (s ServerStorage) lessBusyServer() (conn *tagrpc.TCPConn, addr [32]byte, er
 	for key, server := range s {
 		freeConn := server.ServerInfo.ConnectionLimit - server.ServerInfo.ConnectionCount
 		if freeConn > uint32(maxFreeConn) {
-			addr = server.ServerInfo.Addr
+			addr = server.ServerInfo.TcpAddr
 			conn = key
 			maxFreeConn = int(freeConn)
 		}
@@ -156,13 +156,15 @@ func receiveSN(req interface{}) (resp interface{}, err error) {
 	if payload.ToConnTCP {
 		err = errors.New("Устройство занято")
 		return
-	} else {
-		payload.ToConnTCP = true
-		deviceStorage[SNBytes] = payload
 	}
+
+	payload.ToConnTCP = true
+	deviceStorage[SNBytes] = payload
 
 	select {
 	case <-time.After(time.Second * 20):
+		payload.ToConnTCP = false
+		deviceStorage[SNBytes] = payload
 		err = errors.New("Устройство не доступно")
 		return
 	case resp = <-deviceStorage[SNBytes].HttpAddrChan:
@@ -317,19 +319,18 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					return
 				}
 
+				fmt.Println(serverConn)
 				_, err = serverConn.Execute(1027, responseGenericInfo)
 				if err != nil {
 					fmt.Println("Request:", err)
 					return
 				}
-				fmt.Println("saga")
+
 				_, err = conn.Execute(1026, []byte(serverAddr[:]))
 				if err != nil {
 					fmt.Println("Execute:", err)
 					return
 				}
-
-				fmt.Println("gasgas")
 				tmp := deviceStorage[genericInfo.SN]
 				tmp.ToConnTCP = false
 				deviceStorage[genericInfo.SN] = tmp
@@ -377,7 +378,6 @@ func updateServerInfo(conn *tagrpc.TCPConn) (err error) {
 
 func configureTcpForServer(conn *tagrpc.TCPConn) {
 	conn.HandleFunc(2051, sendClientHttpAddr)
-	conn.HandleFunc(2052, closeDeviceConnection)
 }
 
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -401,11 +401,6 @@ func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 
 	addr := "http://" + httpAddr + "/api/ubus/" + "?SN=" + SN + "&endpoint=http://" + byteArrToString(serverInfo.HttpAddr[:])
 	deviceStorage[deviceInfo.SN].HttpAddrChan <- addr
-	return
-}
-
-func closeDeviceConnection(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	fmt.Println("hello")
 	return
 }
 

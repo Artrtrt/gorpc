@@ -249,6 +249,8 @@ func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 }
 
 func receiveDeviceInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	defer n.Response(1027, []byte("OK"))
+	fmt.Println("agsfd")
 	var deviceInfo typedef.GenericInfo
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
@@ -259,12 +261,6 @@ func receiveDeviceInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	_, ok := wantToConnectStorage[deviceInfo.SN]
 	if !ok {
 		wantToConnectStorage[deviceInfo.SN] = deviceInfo
-	}
-
-	err = n.Response(1027, []byte("OK"))
-	if err != nil {
-		err = fmt.Errorf("%s %s", "Response:", err)
-		return
 	}
 
 	return

@@ -3,11 +3,15 @@ package main
 import (
 	"bytes"
 	"crypto/rsa"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
+	"os/exec"
 	"rsautil"
 	"tag"
 	"time"
@@ -18,15 +22,54 @@ import (
 )
 
 var (
-	SN   string = "014223586595610"
-	err  error
-	info typedef.GenericInfo
-
+	err        error
+	info       typedef.GenericInfo
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 
-	hubUDPAddr string = "192.168.1.150:2000"
+	connWithHub bool   = false
+	hubUDPAddr  string = "192.168.1.150:2000"
 )
+
+type SystemBoardInfo struct {
+	Manufacturer string
+	Product      string
+	Hostname     string
+	Serial       string
+	Release      struct {
+		Revision string
+		Version  string
+	}
+}
+
+func GetSystemBoardInfo() (info SystemBoardInfo, err error) {
+	cmd := exec.Command("ubus", "call", "system", "board")
+	byteArr, err := cmd.Output()
+	if err != nil {
+		err = fmt.Errorf("%s %s", "Command", err.Error())
+		return
+	}
+
+	err = json.Unmarshal([]byte(byteArr), &info)
+	if err != nil {
+		return SystemBoardInfo{}, err
+	}
+
+	return
+}
+
+func GetDeviceUptime() (uptime float32, err error) {
+	cmd := exec.Command("cat", "/proc/uptime")
+	byteArr, err := cmd.Output()
+	if err != nil {
+		err = fmt.Errorf("%s %s", "Command", err.Error())
+		return
+	}
+
+	bits := binary.LittleEndian.Uint32(byteArr)
+	uptime = math.Float32frombits(bits)
+	return
+}
 
 func main() {
 	publicKey, err = rsautil.PemToPublicKey("public.pem")
@@ -41,36 +84,6 @@ func main() {
 		return
 	}
 
-	///-------------------------------------------
-	tcpAddr, err := net.ResolveTCPAddr("tcp", "192.168.1.150:8083")
-	if err != nil {
-		fmt.Println("ResolveTCPAddr:", err)
-		return
-	}
-
-	conn, err := tagrpc.DialTCP(nil, tcpAddr)
-	if err != nil {
-		fmt.Println("DialTCP:", err)
-		return
-	}
-
-	configureTcp(conn)
-	fmt.Printf("Подключился к серверу %s\n", conn.Tcp.RemoteAddr())
-	go func(*tagrpc.TCPConn) {
-		info.Busy = true
-		defer func() {
-			info.Busy = false
-		}()
-		for {
-			err = conn.Update(time.Second * 60)
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
-		}
-	}(conn)
-
-	///-------------------------------------------
 	UDPAddr, err := net.ResolveUDPAddr("udp", hubUDPAddr)
 	if err != nil {
 		fmt.Println("ResolveUDPAddr:", err)
@@ -86,9 +99,16 @@ func main() {
 	defer udp.Close()
 	go configureUdp(udp)
 
-	SNBytes := [16]byte{}
-	copy(SNBytes[:], []byte(SN))
-	deviceInfo := typedef.GenericInfo{SN: SNBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
+	systemBoard, err := GetSystemBoardInfo()
+	if err != nil {
+		fmt.Println("GetSystemBoardInfo:", err)
+		return
+	}
+
+	fmt.Println(systemBoard.Serial)
+	var snBytes [16]byte
+	copy(snBytes[:], systemBoard.Serial)
+	deviceInfo := typedef.GenericInfo{SN: snBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
 	info = deviceInfo
 	for {
 		telemetry, err := xbyte.StructToByte(deviceInfo)
@@ -160,6 +180,8 @@ func sendGenericInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 }
 
 func connectToServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	defer n.Response(1026, []byte("OK"))
+
 	if info.Busy {
 		return
 	}
@@ -182,20 +204,13 @@ func connectToServer(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 
 	configureTcp(conn)
 	fmt.Printf("Подключился к серверу %s\n", conn.Tcp.RemoteAddr())
-	err = n.Response(1026, []byte("OK"))
-	if err != nil {
-		err = fmt.Errorf("%s %s", "Response:", err)
-		return
-	}
 
 	go func(*tagrpc.TCPConn) {
 		info.Busy = true
-		defer func() {
-			info.Busy = false
-		}()
 		for {
 			err = conn.Update(time.Second * 60)
 			if err != nil {
+				info.Busy = false
 				fmt.Println(err)
 				return
 			}
@@ -241,7 +256,7 @@ func configureUdp(udp *tag.Udp) {
 }
 
 func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
-	if info.Busy {
+	if info.Busy || connWithHub {
 		return
 	}
 
@@ -259,10 +274,12 @@ func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
 
 	configureTcp(conn)
 	fmt.Println("Подключился к хабу")
+	connWithHub = true
 	go func(*tagrpc.TCPConn) {
 		for {
-			err = conn.Update(time.Second * 100)
+			err = conn.Update(time.Second * 60)
 			if err != nil {
+				connWithHub = false
 				fmt.Println(err)
 				return
 			}
