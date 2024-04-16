@@ -5,3 +5,5 @@
 *.sql
 *.exe
 static
+*.bash
+*.ps1
