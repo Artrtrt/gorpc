@@ -18,8 +18,8 @@ import (
 	"gopack/jsonrpc"
 	"gopack/tagrpc"
 	"gopack/xbyte"
-	"rsautil"
 	"typedef"
+	"utils"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -174,13 +174,13 @@ func receiveSN(req interface{}) (resp interface{}, err error) {
 }
 
 func main() {
-	publicKey, err = rsautil.PemToPublicKey("public.pem")
+	publicKey, err = utils.PemToPublicKey("public.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey", err)
 		return
 	}
 
-	privateKey, err = rsautil.PemToPrivateKey("private.pem")
+	privateKey, err = utils.PemToPrivateKey("private.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey", err)
 		return
@@ -386,7 +386,7 @@ func configureTcpForServer(conn *tagrpc.TCPConn) {
 }
 
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	return errors.New(fmt.Sprint("remoteErr:", string(val)))
+	return fmt.Errorf("remoteErr: %s", string(val))
 }
 
 func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {

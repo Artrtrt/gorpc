@@ -8,7 +8,7 @@ replace gopack/tagrpc => ../../../gopack/tagrpc/
 
 replace gopack/jsonrpc => ../../../gopack/jsonrpc/
 
-replace rsautil => ../../internal/rsautil/
+replace utils => ../../internal/utils/
 
 replace typedef => ../../internal/typedef/
 
@@ -21,7 +21,6 @@ replace gopack/xbyte => ../../../gopack/xbyte/
 require (
 	gopack/tagrpc v0.0.0-00010101000000-000000000000
 	gopack/xbyte v0.0.0
-	rsautil v0.0.0-00010101000000-000000000000
 	typedef v0.0.0-00010101000000-000000000000
 )
 
@@ -30,4 +29,5 @@ require (
 	golang.org/x/sys v0.16.0 // indirect
 	gopack/jsonrpc v0.0.0-00010101000000-000000000000 // indirect
 	tag v0.0.0-00010101000000-000000000000 // indirect
+	utils v0.0.0-00010101000000-000000000000 // indirect
 )

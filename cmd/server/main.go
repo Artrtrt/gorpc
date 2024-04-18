@@ -3,18 +3,18 @@ package main
 import (
 	"bytes"
 	"crypto/rsa"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
-	"tag"
 	"time"
 
 	"gopack/tagrpc"
 	"gopack/xbyte"
-	"rsautil"
+	"tag"
 	"typedef"
+
+	"utils"
 )
 
 type ConnectStorage map[*tagrpc.TCPConn]string
@@ -100,13 +100,13 @@ func httpServer() {
 }
 
 func main() {
-	publicKey, err = rsautil.PemToPublicKey("public.pem")
+	publicKey, err = utils.PemToPublicKey("public.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey", err)
 		return
 	}
 
-	privateKey, err = rsautil.PemToPrivateKey("private.pem")
+	privateKey, err = utils.PemToPrivateKey("private.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey", err)
 		return
@@ -245,7 +245,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 }
 
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	return errors.New(fmt.Sprint("remoteErr:", string(val)))
+	return fmt.Errorf("remoteErr: %s", string(val))
 }
 
 func receiveDeviceInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {

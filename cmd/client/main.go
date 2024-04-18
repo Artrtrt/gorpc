@@ -5,20 +5,19 @@ import (
 	"crypto/rsa"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net"
 	"net/http"
 	"os/exec"
-	"rsautil"
-	"tag"
 	"time"
-	"typedef"
 
 	"gopack/tagrpc"
 	"gopack/xbyte"
+	"tag"
+	"typedef"
+	"utils"
 )
 
 var (
@@ -71,13 +70,13 @@ func GetDeviceUptime() (uptime float32, err error) {
 }
 
 func main() {
-	publicKey, err = rsautil.PemToPublicKey("public.pem")
+	publicKey, err = utils.PemToPublicKey("public.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey:", err)
 		return
 	}
 
-	privateKey, err = rsautil.PemToPrivateKey("private.pem")
+	privateKey, err = utils.PemToPrivateKey("private.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey:", err)
 		return
@@ -136,7 +135,7 @@ func configureTcp(conn *tagrpc.TCPConn) {
 }
 
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	return errors.New(fmt.Sprint("remoteErr: ", string(val)))
+	return fmt.Errorf("remoteErr: %s", string(val))
 }
 
 func rsaSetup(n *tagrpc.Node, tag uint16, val []byte) (err error) {
