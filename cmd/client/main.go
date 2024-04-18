@@ -15,9 +15,9 @@ import (
 
 	"gopack/tagrpc"
 	"gopack/xbyte"
-	"tag"
-	"typedef"
-	"utils"
+	typedef "internal/typedef"
+	rsautil "internal/utils"
+	udprpc "pkg/tagrpc"
 )
 
 var (
@@ -70,13 +70,13 @@ func GetDeviceUptime() (uptime float32, err error) {
 }
 
 func main() {
-	publicKey, err = utils.PemToPublicKey("public.pem")
+	publicKey, err = rsautil.PemToPublicKey("public.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey:", err)
 		return
 	}
 
-	privateKey, err = utils.PemToPrivateKey("private.pem")
+	privateKey, err = rsautil.PemToPrivateKey("private.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey:", err)
 		return
@@ -88,7 +88,7 @@ func main() {
 		return
 	}
 
-	udp, err := tag.NewUdp(":0")
+	udp, err := udprpc.NewUdp(":0")
 	if err != nil {
 		fmt.Println("NewUdp:", err)
 		return
@@ -241,7 +241,7 @@ func executeJsonRPC(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 }
 
 // UDP
-func configureUdp(udp *tag.Udp) {
+func configureUdp(udp *udprpc.Udp) {
 	udp.HandleFunc(1025, connectToHub)
 
 	for {
@@ -253,7 +253,7 @@ func configureUdp(udp *tag.Udp) {
 	}
 }
 
-func connectToHub(u *tag.Udp, tag uint16, val []byte) (err error) {
+func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 	if info.Busy {
 		return
 	}

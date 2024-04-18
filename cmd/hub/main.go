@@ -12,14 +12,14 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"tag"
 	"time"
 
 	"gopack/jsonrpc"
 	"gopack/tagrpc"
 	"gopack/xbyte"
-	"typedef"
-	"utils"
+	typedef "internal/typedef"
+	rsautil "internal/utils"
+	udprpc "pkg/tagrpc"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -174,13 +174,13 @@ func receiveSN(req interface{}) (resp interface{}, err error) {
 }
 
 func main() {
-	publicKey, err = utils.PemToPublicKey("public.pem")
+	publicKey, err = rsautil.PemToPublicKey("public.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey", err)
 		return
 	}
 
-	privateKey, err = utils.PemToPrivateKey("private.pem")
+	privateKey, err = rsautil.PemToPrivateKey("private.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey", err)
 		return
@@ -208,7 +208,7 @@ func main() {
 		os.Exit(1)
 	}()
 
-	udp, err := tag.NewUdp(udpAddr)
+	udp, err := udprpc.NewUdp(udpAddr)
 	if err != nil {
 		fmt.Println("NewUdp:", err)
 		return
@@ -412,7 +412,7 @@ func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 }
 
 // UDP
-func configureUdp(udp *tag.Udp) {
+func configureUdp(udp *udprpc.Udp) {
 	udp.HandleFunc(2049, receiveGenericServerInfo)
 	udp.HandleFunc(3073, receiveGenericDeviceInfo)
 
@@ -425,7 +425,7 @@ func configureUdp(udp *tag.Udp) {
 	}
 }
 
-func receiveGenericServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
+func receiveGenericServerInfo(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 	serverInfo := typedef.GenericInfo{}
 	err = xbyte.ByteToStruct(val, &serverInfo)
 	if err != nil {
@@ -451,7 +451,7 @@ func receiveGenericServerInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
 	return
 }
 
-func receiveGenericDeviceInfo(u *tag.Udp, tag uint16, val []byte) (err error) {
+func receiveGenericDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 	deviceInfo := typedef.GenericInfo{}
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
