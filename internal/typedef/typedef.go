@@ -67,15 +67,3 @@ func NewServerInfoControl(tcpAddr [32]byte, httpAddr [32]byte, connectionLimit u
 		},
 	}
 }
-
-type Server struct {
-	Control *ServerInfoControl
-	Info    *GenericInfo
-}
-
-func NewServer(tcpAddr [32]byte, httpAddr [32]byte, connectionLimit uint32, info *GenericInfo) *Server {
-	return &Server{
-		Control: NewServerInfoControl(tcpAddr, httpAddr, connectionLimit),
-		Info:    info,
-	}
-}

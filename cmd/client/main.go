@@ -15,7 +15,7 @@ import (
 
 	"gopack/tagrpc"
 	"gopack/xbyte"
-	typedef "internal/typedef"
+	"internal/typedef"
 	rsautil "internal/utils"
 	udprpc "pkg/tagrpc"
 )
@@ -127,15 +127,10 @@ func main() {
 
 // TCP
 func configureTcp(conn *tagrpc.TCPConn) {
-	conn.HandleFunc(1, remoteErr)
 	conn.HandleFunc(2, rsaSetup)
 	conn.HandleFunc(3, sendGenericInfo)
 	conn.HandleFunc(1026, connectToServer)
 	conn.HandleFunc(2053, executeJsonRPC)
-}
-
-func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	return fmt.Errorf("remoteErr: %s", string(val))
 }
 
 func rsaSetup(n *tagrpc.Node, tag uint16, val []byte) (err error) {
