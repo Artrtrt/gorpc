@@ -21,6 +21,8 @@ type TrpcServerHandler struct {
 	service.RemoteErr
 	service.RsaSetup
 	service.SendGenericInfo
+	service.ReceiveDeviceInfo
+	service.SendServerInfo
 }
 
 type ConnectStorage map[*tagrpc.TCPConn]string
@@ -39,7 +41,7 @@ var (
 	SN                string = "014223586595611"
 	err               error
 	genericInfo       *typedef.GenericInfo
-	ServerInfoControl *typedef.ServerInfoControl
+	serverInfoControl *typedef.ServerInfoControl
 
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
@@ -132,7 +134,6 @@ func main() {
 	}
 
 	defer tcpLr.Close()
-	tcpLr.HandleFunc(1, remoteErr)
 	go acceptTcp(tcpLr)
 	go httpServer()
 	UDPAddr, err := net.ResolveUDPAddr("udp", hubUDPAddr)
@@ -155,7 +156,7 @@ func main() {
 	copy(tcpAddrBytes[:], []byte(tcpAddr))
 	copy(httpAddrBytes[:], []byte(httpAddr))
 	genericInfo = &typedef.GenericInfo{SN: SNBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
-	ServerInfoControl = typedef.NewServerInfoControl(tcpAddrBytes, httpAddrBytes, 100)
+	serverInfoControl = typedef.NewServerInfoControl(tcpAddrBytes, httpAddrBytes, 100)
 
 	for {
 		info, err := xbyte.StructToByte(genericInfo)
@@ -251,72 +252,6 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 	}
 }
 
-func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	return fmt.Errorf("remoteErr: %s", string(val))
-}
-
-func receiveDeviceInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	defer n.Response(1027, []byte("OK"))
-	var deviceInfo typedef.GenericInfo
-	err = xbyte.ByteToStruct(val, &deviceInfo)
-	if err != nil {
-		err = fmt.Errorf("ByteToStruct: %s", err)
-		return
-	}
-
-	_, ok := wantToConnectStorage[deviceInfo.SN]
-	if !ok {
-		wantToConnectStorage[deviceInfo.SN] = deviceInfo
-	}
-
-	return
-}
-
-func configureTcpForHub(conn *tagrpc.TCPConn) {
-	conn.HandleFunc(1027, receiveDeviceInfo)
-	conn.HandleFunc(1029, sendServerInfo)
-}
-
-func rsaSetup(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	hubPublicKey, err := xbyte.ByteToRsaPublic(val)
-	if err != nil {
-		err = fmt.Errorf("%s %s", "ByteToRsaPublic:", err)
-		return
-	}
-
-	dst, err := xbyte.RsaPublicToByte(publicKey)
-	if err != nil {
-		err = fmt.Errorf("%s %s", "RsaPublicToByte:", err)
-		return
-	}
-
-	err = n.Response(2, dst)
-	if err != nil {
-		err = fmt.Errorf("%s %s", "Response:", err)
-		return
-	}
-
-	n.Codec = tagrpc.NewRsaCodec(privateKey, hubPublicKey)
-	return
-}
-
-func sendServerInfo(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	serverInfo, err := xbyte.StructToByte(ServerInfoControl.ServerInfo)
-	if err != nil {
-		err = fmt.Errorf("StructToByte: %s", err)
-		return
-	}
-
-	err = n.Response(1029, serverInfo)
-	if err != nil {
-		err = fmt.Errorf("%s %s", "Response:", err)
-		return
-	}
-
-	return
-}
-
-// UDP
 func configureUdp(udp *udprpc.Udp) {
 	udp.HandleFunc(1025, connectToHub)
 
@@ -354,12 +289,19 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 		SendGenericInfo: service.SendGenericInfo{
 			GenericInfo: genericInfo,
 		},
+		ReceiveDeviceInfo: service.ReceiveDeviceInfo{
+			WantToConnectStorage: wantToConnectStorage,
+		},
+		SendServerInfo: service.SendServerInfo{
+			ServerInfoControl: serverInfoControl,
+		},
 	}
 
-	hubConn.HandleFunc(1, server.RemoteErr.Handler)
-	hubConn.HandleFunc(2, server.RsaSetup.Handler)
-	hubConn.HandleFunc(3, server.SendGenericInfo.Handler)
-	configureTcpForHub(hubConn)
+	hubConn.HandleFunc(service.TagRemoteErr, server.RemoteErr.Handler)
+	hubConn.HandleFunc(service.TagRsaSetup, server.RsaSetup.Handler)
+	hubConn.HandleFunc(service.TagSendGenericInfo, server.SendGenericInfo.Handler)
+	hubConn.HandleFunc(service.TagReceiveDeviceInfo, server.ReceiveDeviceInfo.Handler)
+	hubConn.HandleFunc(service.TagSendServerInfo, server.SendServerInfo.Handler)
 	fmt.Println("Подключился к хабу")
 	go func(*tagrpc.TCPConn) {
 		genericInfo.Busy = true
