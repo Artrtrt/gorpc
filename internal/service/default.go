@@ -45,7 +45,7 @@ func (data RsaSetup) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error)
 		return
 	}
 
-	err = n.Response(2, dst)
+	err = n.Response(TagRsaSetup, dst)
 	if err != nil {
 		err = fmt.Errorf("%s %s", "Response:", err)
 		return
@@ -66,7 +66,7 @@ func (data SendGenericInfo) Handler(n *tagrpc.Node, tag uint16, val []byte) (err
 		return
 	}
 
-	err = n.Response(3, byteInfo)
+	err = n.Response(TagSendGenericInfo, byteInfo)
 	if err != nil {
 		err = fmt.Errorf("%s %s", "Response:", err)
 		return

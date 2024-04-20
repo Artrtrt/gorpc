@@ -11,8 +11,7 @@ import (
 )
 
 const (
-	TagConnectToServer = 1026
-	TagExecuteJsonRPC  = 2053
+	TagSendClientInfoUdp = 3073
 )
 
 type ConnectToServer struct {

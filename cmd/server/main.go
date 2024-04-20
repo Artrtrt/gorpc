@@ -13,7 +13,7 @@ import (
 	"gopack/xbyte"
 	"internal/service"
 	"internal/typedef"
-	rsautil "internal/utils"
+	"internal/utils"
 	udprpc "pkg/tagrpc"
 )
 
@@ -44,7 +44,6 @@ var (
 	serverInfoControl *typedef.ServerInfoControl
 
 	privateKey *rsa.PrivateKey
-	publicKey  *rsa.PublicKey
 
 	hubUDPAddr           string = "192.168.1.150:2000"
 	tcpAddr              string = "192.168.1.150:8083"
@@ -77,7 +76,7 @@ func httpServer() {
 			return
 		}
 
-		SN := MagicSNTransform(magic)
+		SN := utils.MagicSNTransform(magic)
 		conn := connectStorage.Find(SN)
 		if conn == nil {
 			rw.Write([]byte("Устройство не найдено"))
@@ -90,7 +89,7 @@ func httpServer() {
 			return
 		}
 
-		resp, err := conn.Execute(2053, buf)
+		resp, err := conn.Execute(service.TagExecuteJsonRPC, buf)
 		if err != nil {
 			rw.Write([]byte(err.Error()))
 			return
@@ -109,13 +108,7 @@ func httpServer() {
 }
 
 func main() {
-	publicKey, err = rsautil.PemToPublicKey("public.pem")
-	if err != nil {
-		fmt.Println("PemToPublicKey", err)
-		return
-	}
-
-	privateKey, err = rsautil.PemToPrivateKey("private.pem")
+	privateKey, err = utils.PemToPrivateKey("private.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey", err)
 		return
@@ -165,18 +158,16 @@ func main() {
 			continue
 		}
 
-		_, err = udp.Write(UDPAddr, uint16(2049), info)
+		_, err = udp.Write(UDPAddr, service.TagSendServerInfoUdp, info)
 		if err != nil {
 			fmt.Println("UdpWrite:", err)
 			continue
 		}
 
-		// fmt.Println(n)
 		time.Sleep(time.Second * 5)
 	}
 }
 
-// TCP
 func acceptTcp(lr *tagrpc.TCPListener) {
 	for {
 		conn, err := lr.AcceptTCP()
@@ -201,13 +192,13 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 		}(conn)
 
 		go func(*tagrpc.TCPConn) {
-			dst, err := xbyte.RsaPublicToByte(publicKey)
+			dst, err := xbyte.RsaPublicToByte(&privateKey.PublicKey)
 			if err != nil {
 				fmt.Println("RsaPublicToByte", err)
 				return
 			}
 
-			response, err := conn.Execute(2, dst)
+			response, err := conn.Execute(service.TagRsaSetup, dst)
 			if err != nil {
 				fmt.Println("Execute", err)
 				return
@@ -221,7 +212,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 
 			conn.Codec = tagrpc.NewRsaCodec(privateKey, clientPublicKey)
 
-			response, err = conn.Execute(3, []byte{})
+			response, err = conn.Execute(service.TagSendGenericInfo, []byte{})
 			if err != nil {
 				fmt.Println("Execute", err)
 				return
@@ -236,14 +227,14 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 
 			_, ok := wantToConnectStorage[genericInfo.SN]
 			if !ok {
-				conn.Write(1, []byte("Unknown device"))
+				conn.Write(service.TagRemoteErr, []byte("Unknown device"))
 				conn.Close()
 				return
 			}
 
 			delete(wantToConnectStorage, genericInfo.SN)
-			connectStorage[conn] = byteArrToString(genericInfo.SN[:])
-			err = hubConn.Request(2051, response)
+			connectStorage[conn] = utils.ByteArrToString(genericInfo.SN[:])
+			err = hubConn.Request(service.TagSendToClientHttpAddr, response)
 			if err != nil {
 				fmt.Println("Request", err)
 				return
@@ -253,7 +244,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 }
 
 func configureUdp(udp *udprpc.Udp) {
-	udp.HandleFunc(1025, connectToHub)
+	udp.HandleFunc(service.TagConnectToHub, connectToHub)
 
 	for {
 		err := udp.ReadAndExec()
@@ -320,19 +311,4 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 	}(hubConn)
 
 	return
-}
-
-// Вынести в utils
-func byteArrToString(arr []byte) string {
-	return string(bytes.TrimRightFunc(arr, func(r rune) bool {
-		return r == 0
-	}))
-}
-
-func MagicSNTransform(SN string) string {
-	runes := []rune(SN)
-	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
-		runes[i], runes[j] = runes[j], runes[i]
-	}
-	return string(runes)
 }

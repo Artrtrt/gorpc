@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/rsa"
 	"encoding/csv"
 	"errors"
@@ -10,15 +9,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"gopack/jsonrpc"
 	"gopack/tagrpc"
 	"gopack/xbyte"
-	typedef "internal/typedef"
-	rsautil "internal/utils"
+	"internal/service"
+	"internal/typedef"
+	"internal/utils"
 	udprpc "pkg/tagrpc"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -174,13 +173,13 @@ func receiveSN(req interface{}) (resp interface{}, err error) {
 }
 
 func main() {
-	publicKey, err = rsautil.PemToPublicKey("public.pem")
+	publicKey, err = utils.PemToPublicKey("public.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey", err)
 		return
 	}
 
-	privateKey, err = rsautil.PemToPrivateKey("private.pem")
+	privateKey, err = utils.PemToPrivateKey("private.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey", err)
 		return
@@ -295,7 +294,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
-			if contains(serverList, byteArrToString(genericInfo.SN[:])) {
+			if utils.Contains(serverList, utils.ByteArrToString(genericInfo.SN[:])) {
 				if serverStorage.Contains(genericInfo.SN) {
 					return
 				}
@@ -308,7 +307,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					return
 				}
 
-				conn.Storage["httpAddr"] = byteArrToString(serverInfo.HttpAddr[:])
+				conn.Storage["httpAddr"] = utils.ByteArrToString(serverInfo.HttpAddr[:])
 				for {
 					err = updateServerInfo(conn)
 					if err != nil {
@@ -348,7 +347,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 }
 
 func getServerInfo(conn *tagrpc.TCPConn) (serverInfo typedef.ServerInfo, err error) {
-	response, err := conn.Execute(1029, []byte{})
+	response, err := conn.Execute(1028, []byte{})
 	if err != nil {
 		fmt.Println("Execute", err)
 		return
@@ -382,7 +381,7 @@ func updateServerInfo(conn *tagrpc.TCPConn) (err error) {
 }
 
 func configureTcpForServer(conn *tagrpc.TCPConn) {
-	conn.HandleFunc(2051, sendClientHttpAddr)
+	conn.HandleFunc(service.TagDeviceConnected, sendClientHttpAddr)
 }
 
 func remoteErr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -397,7 +396,7 @@ func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	SN := MagicSNTransform(byteArrToString(deviceInfo.SN[:]))
+	SN := utils.MagicSNTransform(utils.ByteArrToString(deviceInfo.SN[:]))
 
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
@@ -433,7 +432,7 @@ func receiveGenericServerInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 		return
 	}
 
-	if !contains(serverList, byteArrToString(serverInfo.SN[:])) {
+	if !utils.Contains(serverList, utils.ByteArrToString(serverInfo.SN[:])) {
 		_, err = u.Write(u.Raddr, 1, []byte("Unknown device"))
 		return
 	}
@@ -482,28 +481,4 @@ func receiveGenericDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 	}
 
 	return
-}
-
-// Вынести в utils
-func byteArrToString(arr []byte) string {
-	return string(bytes.TrimRightFunc(arr, func(r rune) bool {
-		return r == 0
-	}))
-}
-
-func contains(arr []string, str string) bool {
-	for _, val := range arr {
-		if strings.Contains(val, str) {
-			return true
-		}
-	}
-	return false
-}
-
-func MagicSNTransform(SN string) string {
-	runes := []rune(SN)
-	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
-		runes[i], runes[j] = runes[j], runes[i]
-	}
-	return string(runes)
 }

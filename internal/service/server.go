@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	TagReceiveDeviceInfo = 1027
-	TagSendServerInfo    = 1029
+	TagSendServerInfoUdp = 2049
+	TagDeviceConnected   = 2050
+	TagExecuteJsonRPC    = 2052
 )
 
 type ReceiveDeviceInfo struct {
@@ -18,7 +19,7 @@ type ReceiveDeviceInfo struct {
 }
 
 func (data ReceiveDeviceInfo) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	defer n.Response(TagReceiveDeviceInfo, []byte("OK"))
+	defer n.Response(TagSendInfoToServer, []byte("OK"))
 	var deviceInfo typedef.GenericInfo
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
@@ -44,7 +45,7 @@ func (data SendServerInfo) Handler(n *tagrpc.Node, tag uint16, val []byte) (err 
 		return
 	}
 
-	err = n.Response(1029, serverInfo)
+	err = n.Response(TagGetServerInfo, serverInfo)
 	if err != nil {
 		err = fmt.Errorf("%s %s", "Response:", err)
 		return

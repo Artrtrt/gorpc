@@ -14,17 +14,13 @@ import (
 	"gopack/xbyte"
 	"internal/service"
 	"internal/typedef"
-	rsautil "internal/utils"
+	"internal/utils"
 	udprpc "pkg/tagrpc"
 )
 
 type TrpcClientHubHandler struct {
 	service.TrpcDefaultHandler
 	service.ConnectToServer
-}
-
-type TrpcClientServerHandler struct {
-	service.TrpcDefaultHandler
 }
 
 var (
@@ -76,13 +72,7 @@ func GetDeviceUptime() (uptime float32, err error) {
 }
 
 func main() {
-	// publicKey, err = rsautil.PemToPublicKey("public.pem")
-	// if err != nil {
-	// 	fmt.Println("PemToPublicKey:", err)
-	// 	return
-	// }
-
-	privateKey, err = rsautil.PemToPrivateKey("private.pem")
+	privateKey, err = utils.PemToPrivateKey("private.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey:", err)
 		return
@@ -120,18 +110,17 @@ func main() {
 			continue
 		}
 
-		_, err = udp.Write(UDPAddr, uint16(3073), telemetry)
+		_, err = udp.Write(UDPAddr, service.TagSendClientInfoUdp, telemetry)
 		if err != nil {
 			fmt.Println("UdpWrite:", err)
 			continue
 		}
-		// fmt.Println(n)
 		time.Sleep(time.Second * 5)
 	}
 }
 
 func configureUdp(udp *udprpc.Udp) {
-	udp.HandleFunc(1025, connectToHub)
+	udp.HandleFunc(service.TagConnectToHub, connectToHub)
 
 	for {
 		err := udp.ReadAndExec()
