@@ -9,6 +9,18 @@ import (
 	typedef "internal/typedef"
 )
 
+const (
+	TagRemoteErr       = 1
+	TagRsaSetup        = 2
+	TagSendGenericInfo = 3
+)
+
+type TrpcDefaultHandler struct {
+	RemoteErr
+	RsaSetup
+	SendGenericInfo
+}
+
 type RemoteErr struct {
 }
 
