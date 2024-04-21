@@ -2,18 +2,21 @@ package typedef
 
 import "errors"
 
-type GenericInfo struct {
+type SystemBoard struct {
 	// Manufacturer [64]byte
 	// Product      [64]byte
 	// Hostname     [64]byte
-	// Serial       [64]byte
+	Serial [64]byte
 	// Release      struct {
 	// 	Revision [64]byte
 	// 	Version  [64]byte
 	// }
-	SN     [16]byte
-	Uptime int64
-	Busy   bool
+}
+
+type GenericInfo struct {
+	SystemBoard SystemBoard
+	Uptime      uint64
+	Busy        bool
 }
 
 type ServerInfo struct {

@@ -6,7 +6,7 @@ import (
 	"gopack/tagrpc"
 	"gopack/xbyte"
 
-	typedef "internal/typedef"
+	"internal/typedef"
 )
 
 const (

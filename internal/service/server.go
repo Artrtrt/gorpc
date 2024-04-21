@@ -15,7 +15,7 @@ const (
 )
 
 type ReceiveDeviceInfo struct {
-	WantToConnectStorage map[[16]byte]typedef.GenericInfo
+	WantToConnectStorage map[[64]byte]typedef.GenericInfo
 }
 
 func (data ReceiveDeviceInfo) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -27,9 +27,9 @@ func (data ReceiveDeviceInfo) Handler(n *tagrpc.Node, tag uint16, val []byte) (e
 		return
 	}
 
-	_, ok := data.WantToConnectStorage[deviceInfo.SN]
+	_, ok := data.WantToConnectStorage[deviceInfo.SystemBoard.Serial]
 	if !ok {
-		data.WantToConnectStorage[deviceInfo.SN] = deviceInfo
+		data.WantToConnectStorage[deviceInfo.SystemBoard.Serial] = deviceInfo
 	}
 	return
 }

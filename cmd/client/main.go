@@ -2,17 +2,14 @@ package main
 
 import (
 	"crypto/rsa"
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
-	"math"
 	"net"
-	"os/exec"
 	"time"
 
 	"gopack/tagrpc"
 	"gopack/xbyte"
 	"internal/service"
+	"internal/telemetry"
 	"internal/typedef"
 	"internal/utils"
 	udprpc "pkg/tagrpc"
@@ -31,47 +28,19 @@ var (
 	hubUDPAddr string = "192.168.1.150:2000"
 )
 
-type SystemBoardInfo struct {
-	Manufacturer string
-	Product      string
-	Hostname     string
-	Serial       string
-	Release      struct {
-		Revision string
-		Version  string
-	}
-}
-
-func GetSystemBoardInfo() (info SystemBoardInfo, err error) {
-	cmd := exec.Command("ubus", "call", "system", "board")
-	byteArr, err := cmd.Output()
-	if err != nil {
-		err = fmt.Errorf("%s %s", "Command", err.Error())
-		return
-	}
-
-	err = json.Unmarshal([]byte(byteArr), &info)
-	if err != nil {
-		return SystemBoardInfo{}, err
-	}
-
-	return
-}
-
-func GetDeviceUptime() (uptime float32, err error) {
-	cmd := exec.Command("cat", "/proc/uptime")
-	byteArr, err := cmd.Output()
-	if err != nil {
-		err = fmt.Errorf("%s %s", "Command", err.Error())
-		return
-	}
-
-	bits := binary.LittleEndian.Uint32(byteArr)
-	uptime = math.Float32frombits(bits)
-	return
-}
-
 func main() {
+	systemBoard, err := telemetry.GetSystemBoardInfo()
+	if err != nil {
+		fmt.Println("GetSystemBoardInfo:", err)
+		return
+	}
+
+	uptime, err := telemetry.GetDeviceUptime()
+	if err != nil {
+		fmt.Println("GetUptime:", err)
+		return
+	}
+
 	privateKey, err = utils.PemToPrivateKey("private.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey:", err)
@@ -93,24 +62,16 @@ func main() {
 	defer udp.Close()
 	go configureUdp(udp)
 
-	systemBoard, err := GetSystemBoardInfo()
-	if err != nil {
-		fmt.Println("GetSystemBoardInfo:", err)
-		return
-	}
-
-	fmt.Println(systemBoard.Serial)
-	var snBytes [16]byte
-	copy(snBytes[:], systemBoard.Serial)
-	genericInfo = &typedef.GenericInfo{SN: snBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
+	fmt.Println(string(systemBoard.Serial[:]))
+	genericInfo = &typedef.GenericInfo{SystemBoard: systemBoard, Uptime: uptime, Busy: false}
 	for {
-		telemetry, err := xbyte.StructToByte(genericInfo)
+		genericInfoByte, err := xbyte.StructToByte(genericInfo)
 		if err != nil {
 			fmt.Println("StructToByte:", err)
 			continue
 		}
 
-		_, err = udp.Write(UDPAddr, service.TagSendClientInfoUdp, telemetry)
+		_, err = udp.Write(UDPAddr, service.TagSendClientInfoUdp, genericInfoByte)
 		if err != nil {
 			fmt.Println("UdpWrite:", err)
 			continue

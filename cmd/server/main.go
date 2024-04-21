@@ -12,6 +12,7 @@ import (
 	"gopack/tagrpc"
 	"gopack/xbyte"
 	"internal/service"
+	"internal/telemetry"
 	"internal/typedef"
 	"internal/utils"
 	udprpc "pkg/tagrpc"
@@ -27,9 +28,9 @@ type TrpcServerHandler struct {
 
 type ConnectStorage map[*tagrpc.TCPConn]string
 
-func (s ConnectStorage) Find(SN string) *tagrpc.TCPConn {
+func (s ConnectStorage) Find(Serial string) *tagrpc.TCPConn {
 	for conn, val := range s {
-		if val == SN {
+		if val == Serial {
 			return conn
 		}
 	}
@@ -38,7 +39,7 @@ func (s ConnectStorage) Find(SN string) *tagrpc.TCPConn {
 }
 
 var (
-	SN                string = "014223586595611"
+	Serial            string = "014223586595611"
 	err               error
 	genericInfo       *typedef.GenericInfo
 	serverInfoControl *typedef.ServerInfoControl
@@ -49,7 +50,7 @@ var (
 	tcpAddr              string = "192.168.1.150:8083"
 	httpAddr             string = "localhost:8084"
 	hubConn              *tagrpc.TCPConn
-	wantToConnectStorage = make(map[[16]byte]typedef.GenericInfo)
+	wantToConnectStorage = make(map[[64]byte]typedef.GenericInfo)
 	connectStorage       = ConnectStorage{}
 )
 
@@ -57,7 +58,7 @@ func handleCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, SN")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Serial")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -70,14 +71,14 @@ func handleCORS(next http.Handler) http.Handler {
 
 func httpServer() {
 	http.Handle("/", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		magic := r.Header.Get("SN")
-		if SN == "" {
-			rw.Write([]byte("SN не должен быть пустым"))
+		magic := r.Header.Get("Serial")
+		if Serial == "" {
+			rw.Write([]byte("Serial не должен быть пустым"))
 			return
 		}
 
-		SN := utils.MagicSNTransform(magic)
-		conn := connectStorage.Find(SN)
+		Serial := utils.MagicSNTransform(magic)
+		conn := connectStorage.Find(Serial)
 		if conn == nil {
 			rw.Write([]byte("Устройство не найдено"))
 			return
@@ -142,13 +143,25 @@ func main() {
 	}
 
 	go configureUdp(udp)
-	SNBytes := [16]byte{}
+
+	systemBoard, err := telemetry.GetSystemBoardInfo()
+	if err != nil {
+		fmt.Println("GetSystemBoardInfo:", err)
+		return
+	}
+
+	uptime, err := telemetry.GetDeviceUptime()
+	if err != nil {
+		fmt.Println("GetUptime:", err)
+		return
+	}
+
+	genericInfo = &typedef.GenericInfo{Serial: systemBoard.Serial, Uptime: uptime, Busy: false}
+
 	tcpAddrBytes := [32]byte{}
 	httpAddrBytes := [32]byte{}
-	copy(SNBytes[:], []byte(SN))
 	copy(tcpAddrBytes[:], []byte(tcpAddr))
 	copy(httpAddrBytes[:], []byte(httpAddr))
-	genericInfo = &typedef.GenericInfo{SN: SNBytes, Uptime: time.Now().Unix() - 1000, Busy: false}
 	serverInfoControl = typedef.NewServerInfoControl(tcpAddrBytes, httpAddrBytes, 100)
 
 	for {
@@ -178,7 +191,6 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 
 		raddr := conn.Tcp.RemoteAddr().String()
 		fmt.Println("Подключился ", raddr)
-
 		go func(*tagrpc.TCPConn) {
 			for {
 				err = conn.Update(time.Second * 60)
@@ -225,15 +237,15 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
-			_, ok := wantToConnectStorage[genericInfo.SN]
+			_, ok := wantToConnectStorage[genericInfo.Serial]
 			if !ok {
 				conn.Write(service.TagRemoteErr, []byte("Unknown device"))
 				conn.Close()
 				return
 			}
 
-			delete(wantToConnectStorage, genericInfo.SN)
-			connectStorage[conn] = utils.ByteArrToString(genericInfo.SN[:])
+			delete(wantToConnectStorage, genericInfo.Serial)
+			connectStorage[conn] = utils.ByteArrToString(genericInfo.Serial[:])
 			err = hubConn.Request(service.TagSendToClientHttpAddr, response)
 			if err != nil {
 				fmt.Println("Request", err)

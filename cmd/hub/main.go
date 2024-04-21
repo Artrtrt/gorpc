@@ -231,7 +231,6 @@ func main() {
 	}
 
 	defer tcpLr.Close()
-	tcpLr.HandleFunc(1, remoteErr)
 	acceptTcp(tcpLr)
 }
 
