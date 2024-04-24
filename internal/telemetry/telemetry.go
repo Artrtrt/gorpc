@@ -11,14 +11,14 @@ import (
 )
 
 type SystemBoardInfo struct {
-	// Manufacturer string
-	// Product      string
-	// Hostname     string
-	Serial string
-	// Release      struct {
-	// 	Revision string
-	// 	Version  string
-	// }
+	Manufacturer string
+	Product      string
+	Hostname     string
+	Serial       string
+	Release      struct {
+		Revision string
+		Version  string
+	}
 }
 
 func GetSystemBoardInfo() (info typedef.SystemBoard, err error) {

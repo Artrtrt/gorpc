@@ -21,9 +21,8 @@ type TrpcClientHubHandler struct {
 }
 
 var (
-	err         error
-	genericInfo *typedef.GenericInfo
 	privateKey  *rsa.PrivateKey
+	genericInfo *typedef.GenericInfo
 
 	hubUDPAddr string = "192.168.1.163:2000"
 )

@@ -43,15 +43,15 @@ func (s ConnectStorage) Find(Serial string) *tagrpc.TCPConn {
 }
 
 var (
-	err               error
+	privateKey        *rsa.PrivateKey
 	genericInfo       *typedef.GenericInfo
 	serverInfoControl *typedef.ServerInfoControl
 
-	privateKey           *rsa.PrivateKey
-	tcpAddr              string = "192.168.1.1:8083"
-	httpAddr             string = "192.168.1.1:8084"
-	hubUDPAddr           string = "192.168.1.163:2000"
-	hubConn              *tagrpc.TCPConn
+	tcpAddr    string = "192.168.1.1:8083"
+	httpAddr   string = "192.168.1.1:8084"
+	hubUDPAddr string = "192.168.1.163:2000"
+	hubConn    *tagrpc.TCPConn
+
 	wantToConnectStorage = make(map[[64]byte]typedef.GenericInfo)
 	connectStorage       = ConnectStorage{}
 )
