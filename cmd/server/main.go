@@ -18,12 +18,16 @@ import (
 	udprpc "pkg/tagrpc"
 )
 
-type TrpcServerHandler struct {
+type TrpcServerHubHandler struct {
 	service.RemoteErr
 	service.RsaSetup
 	service.SendGenericInfo
 	service.ReceiveDeviceInfo
 	service.SendServerInfo
+}
+
+type TrpcServerdeviceHandler struct {
+	service.RemoteErr
 }
 
 type ConnectStorage map[*tagrpc.TCPConn]string
@@ -39,16 +43,14 @@ func (s ConnectStorage) Find(Serial string) *tagrpc.TCPConn {
 }
 
 var (
-	Serial            string = "014223586595611"
 	err               error
 	genericInfo       *typedef.GenericInfo
 	serverInfoControl *typedef.ServerInfoControl
 
-	privateKey *rsa.PrivateKey
-
-	hubUDPAddr           string = "192.168.1.150:2000"
-	tcpAddr              string = "192.168.1.150:8083"
-	httpAddr             string = "localhost:8084"
+	privateKey           *rsa.PrivateKey
+	tcpAddr              string = "192.168.1.1:8083"
+	httpAddr             string = "192.168.1.1:8084"
+	hubUDPAddr           string = "192.168.1.163:2000"
 	hubConn              *tagrpc.TCPConn
 	wantToConnectStorage = make(map[[64]byte]typedef.GenericInfo)
 	connectStorage       = ConnectStorage{}
@@ -58,7 +60,7 @@ func handleCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Serial")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, SN")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -71,14 +73,14 @@ func handleCORS(next http.Handler) http.Handler {
 
 func httpServer() {
 	http.Handle("/", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		magic := r.Header.Get("Serial")
-		if Serial == "" {
+		magic := r.Header.Get("SN")
+		if magic == "" {
 			rw.Write([]byte("Serial не должен быть пустым"))
 			return
 		}
 
-		Serial := utils.MagicSNTransform(magic)
-		conn := connectStorage.Find(Serial)
+		serial := utils.MagicSNTransform(magic)
+		conn := connectStorage.Find(serial)
 		if conn == nil {
 			rw.Write([]byte("Устройство не найдено"))
 			return
@@ -109,6 +111,21 @@ func httpServer() {
 }
 
 func main() {
+	systemBoard, err := telemetry.GetSystemBoardInfo()
+	if err != nil {
+		fmt.Println("GetSystemBoardInfo:", err)
+		return
+	}
+
+	uptime, err := telemetry.GetDeviceUptime()
+	if err != nil {
+		fmt.Println("GetUptime:", err)
+		return
+	}
+
+	fmt.Println(string(systemBoard.Serial[:]))
+	genericInfo = &typedef.GenericInfo{SystemBoard: systemBoard, Uptime: uptime, Busy: false}
+
 	privateKey, err = utils.PemToPrivateKey("private.pem")
 	if err != nil {
 		fmt.Println("PemToPublicKey", err)
@@ -143,21 +160,6 @@ func main() {
 	}
 
 	go configureUdp(udp)
-
-	systemBoard, err := telemetry.GetSystemBoardInfo()
-	if err != nil {
-		fmt.Println("GetSystemBoardInfo:", err)
-		return
-	}
-
-	uptime, err := telemetry.GetDeviceUptime()
-	if err != nil {
-		fmt.Println("GetUptime:", err)
-		return
-	}
-
-	genericInfo = &typedef.GenericInfo{Serial: systemBoard.Serial, Uptime: uptime, Busy: false}
-
 	tcpAddrBytes := [32]byte{}
 	httpAddrBytes := [32]byte{}
 	copy(tcpAddrBytes[:], []byte(tcpAddr))
@@ -190,6 +192,11 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 		}
 
 		raddr := conn.Tcp.RemoteAddr().String()
+		server := TrpcServerdeviceHandler{
+			RemoteErr: service.RemoteErr{},
+		}
+
+		conn.HandleFunc(service.TagRemoteErr, server.RemoteErr.Handler)
 		fmt.Println("Подключился ", raddr)
 		go func(*tagrpc.TCPConn) {
 			for {
@@ -237,16 +244,16 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
-			_, ok := wantToConnectStorage[genericInfo.Serial]
+			_, ok := wantToConnectStorage[genericInfo.SystemBoard.Serial]
 			if !ok {
 				conn.Write(service.TagRemoteErr, []byte("Unknown device"))
 				conn.Close()
 				return
 			}
 
-			delete(wantToConnectStorage, genericInfo.Serial)
-			connectStorage[conn] = utils.ByteArrToString(genericInfo.Serial[:])
-			err = hubConn.Request(service.TagSendToClientHttpAddr, response)
+			delete(wantToConnectStorage, genericInfo.SystemBoard.Serial)
+			connectStorage[conn] = utils.ByteArrToString(genericInfo.SystemBoard.Serial[:])
+			err = hubConn.Request(service.TagDeviceConnected, response)
 			if err != nil {
 				fmt.Println("Request", err)
 				return
@@ -284,7 +291,7 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	server := TrpcServerHandler{
+	server := TrpcServerHubHandler{
 		RemoteErr: service.RemoteErr{},
 		RsaSetup: service.RsaSetup{
 			PrivateKey: privateKey,
@@ -303,8 +310,8 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 	hubConn.HandleFunc(service.TagRemoteErr, server.RemoteErr.Handler)
 	hubConn.HandleFunc(service.TagRsaSetup, server.RsaSetup.Handler)
 	hubConn.HandleFunc(service.TagSendGenericInfo, server.SendGenericInfo.Handler)
-	hubConn.HandleFunc(service.TagReceiveDeviceInfo, server.ReceiveDeviceInfo.Handler)
-	hubConn.HandleFunc(service.TagSendServerInfo, server.SendServerInfo.Handler)
+	hubConn.HandleFunc(service.TagSendInfoToServer, server.ReceiveDeviceInfo.Handler)
+	hubConn.HandleFunc(service.TagGetServerInfo, server.SendServerInfo.Handler)
 	fmt.Println("Подключился к хабу")
 	go func(*tagrpc.TCPConn) {
 		genericInfo.Busy = true

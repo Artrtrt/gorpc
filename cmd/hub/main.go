@@ -31,12 +31,12 @@ type DevicePayload struct {
 	HttpAddrChan chan string
 }
 
-type DeviceStorage map[[16]byte]DevicePayload
+type DeviceStorage map[[64]byte]DevicePayload
 
 // FIXIT
-func (s DeviceStorage) Contains(SN [16]byte) bool {
+func (s DeviceStorage) Contains(SN [64]byte) bool {
 	for _, payload := range s {
-		if payload.GenericInfo.SN == SN {
+		if payload.GenericInfo.SystemBoard.Serial == SN {
 			return true
 		}
 	}
@@ -52,9 +52,9 @@ type ServerPayload struct {
 type ServerStorage map[*tagrpc.TCPConn]ServerPayload
 
 // FIXIT
-func (s ServerStorage) Contains(SN [16]byte) bool {
+func (s ServerStorage) Contains(SN [64]byte) bool {
 	for _, payload := range s {
-		if payload.GenericInfo.SN == SN {
+		if payload.GenericInfo.SystemBoard.Serial == SN {
 			return true
 		}
 	}
@@ -85,8 +85,8 @@ var (
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 
-	udpAddr  string = "192.168.1.150:2000"
-	tpcAddr  string = "192.168.1.150:8080"
+	udpAddr  string = "192.168.1.163:2000"
+	tpcAddr  string = "192.168.1.163:8080"
 	httpAddr string = "localhost:8081"
 
 	serverList    []string
@@ -108,13 +108,12 @@ func handleCORS(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
 func httpServer() {
 	server := jsonrpc.NewServer()
 	var req, resp string
 	server.HandleFunc("sendSN", receiveSN, req, resp)
 	mux := http.NewServeMux()
-	mux.Handle("/hub/", http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+	mux.Handle("/hub/", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			server.ServeHTTP(rw, r)
 		}
@@ -122,7 +121,7 @@ func httpServer() {
 		if r.Method == http.MethodGet {
 			http.StripPrefix("/hub/", http.FileServer(http.Dir("./static/hub"))).ServeHTTP(rw, r)
 		}
-	}))
+	})))
 
 	mux.Handle("/api/ubus/", http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		http.StripPrefix("/api/ubus/", http.FileServer(http.Dir("./static/webui"))).ServeHTTP(rw, r)
@@ -137,7 +136,7 @@ func receiveSN(req interface{}) (resp interface{}, err error) {
 		return
 	}
 
-	SNBytes := [16]byte{}
+	SNBytes := [64]byte{}
 	copy(SNBytes[:], []byte(req.(string)))
 	_, ok := deviceStorage[SNBytes]
 	if !ok {
@@ -293,8 +292,8 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
-			if utils.Contains(serverList, utils.ByteArrToString(genericInfo.SN[:])) {
-				if serverStorage.Contains(genericInfo.SN) {
+			if utils.Contains(serverList, utils.ByteArrToString(genericInfo.SystemBoard.Serial[:])) {
+				if serverStorage.Contains(genericInfo.SystemBoard.Serial) {
 					return
 				}
 
@@ -315,7 +314,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					}
 					time.Sleep(time.Second * 20)
 				}
-			} else if deviceStorage.Contains(genericInfo.SN) {
+			} else if deviceStorage.Contains(genericInfo.SystemBoard.Serial) {
 				serverConn, serverAddr, err := serverStorage.lessBusyServer()
 				if err != nil {
 					conn.Request(1, []byte(err.Error()))
@@ -334,9 +333,9 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					return
 				}
 
-				tmp := deviceStorage[genericInfo.SN]
+				tmp := deviceStorage[genericInfo.SystemBoard.Serial]
 				tmp.ToConnTCP = false
-				deviceStorage[genericInfo.SN] = tmp
+				deviceStorage[genericInfo.SystemBoard.Serial] = tmp
 				conn.Close()
 			} else {
 				conn.Close()
@@ -395,7 +394,7 @@ func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	SN := utils.MagicSNTransform(utils.ByteArrToString(deviceInfo.SN[:]))
+	SN := utils.MagicSNTransform(utils.ByteArrToString(deviceInfo.SystemBoard.Serial[:]))
 
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
@@ -405,7 +404,7 @@ func sendClientHttpAddr(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 
 	serverAddr := n.Storage["httpAddr"].(string)
 	addr := "http://" + httpAddr + "/api/ubus/" + "?SN=" + SN + "&endpoint=http://" + serverAddr
-	deviceStorage[deviceInfo.SN].HttpAddrChan <- addr
+	deviceStorage[deviceInfo.SystemBoard.Serial].HttpAddrChan <- addr
 	return
 }
 
@@ -431,7 +430,7 @@ func receiveGenericServerInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 		return
 	}
 
-	if !utils.Contains(serverList, utils.ByteArrToString(serverInfo.SN[:])) {
+	if !utils.Contains(serverList, utils.ByteArrToString(serverInfo.SystemBoard.Serial[:])) {
 		_, err = u.Write(u.Raddr, 1, []byte("Unknown device"))
 		return
 	}
@@ -458,12 +457,12 @@ func receiveGenericDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 	}
 
 	time := time.Now().Unix()
-	_, ok := deviceStorage[deviceInfo.SN]
+	_, ok := deviceStorage[deviceInfo.SystemBoard.Serial]
 	if ok {
-		data := deviceStorage[deviceInfo.SN]
+		data := deviceStorage[deviceInfo.SystemBoard.Serial]
 		data.Time = time
 		data.GenericInfo = deviceInfo
-		deviceStorage[deviceInfo.SN] = data
+		deviceStorage[deviceInfo.SystemBoard.Serial] = data
 		if data.ToConnTCP && !deviceInfo.Busy {
 			_, err = u.Write(u.Raddr, 1025, []byte(tpcAddr))
 			if err != nil {
@@ -473,7 +472,7 @@ func receiveGenericDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 		}
 		// fmt.Printf("Данные о роутере %s обновились\n", string(deviceInfo.SN[:]))
 	} else {
-		deviceStorage[deviceInfo.SN] = DevicePayload{
+		deviceStorage[deviceInfo.SystemBoard.Serial] = DevicePayload{
 			deviceInfo, time, false, false, make(chan string, 1),
 		}
 		// fmt.Printf("Роутер %s добавлен\n", deviceInfo.SN)

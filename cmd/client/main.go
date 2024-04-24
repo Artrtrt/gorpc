@@ -25,7 +25,7 @@ var (
 	genericInfo *typedef.GenericInfo
 	privateKey  *rsa.PrivateKey
 
-	hubUDPAddr string = "192.168.1.150:2000"
+	hubUDPAddr string = "192.168.1.163:2000"
 )
 
 func main() {
@@ -40,6 +40,9 @@ func main() {
 		fmt.Println("GetUptime:", err)
 		return
 	}
+
+	fmt.Println(string(systemBoard.Serial[:]))
+	genericInfo = &typedef.GenericInfo{SystemBoard: systemBoard, Uptime: uptime, Busy: false}
 
 	privateKey, err = utils.PemToPrivateKey("private.pem")
 	if err != nil {
@@ -61,9 +64,6 @@ func main() {
 
 	defer udp.Close()
 	go configureUdp(udp)
-
-	fmt.Println(string(systemBoard.Serial[:]))
-	genericInfo = &typedef.GenericInfo{SystemBoard: systemBoard, Uptime: uptime, Busy: false}
 	for {
 		genericInfoByte, err := xbyte.StructToByte(genericInfo)
 		if err != nil {
