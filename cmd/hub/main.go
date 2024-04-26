@@ -21,7 +21,7 @@ import (
 	"internal/utils"
 	udprpc "pkg/tagrpc"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type JrpcHubHandler struct {
@@ -114,18 +114,36 @@ func main() {
 
 	db, err := sqlctrl.NewDatabase("sqlite", "./test.db")
 	if err != nil {
-		fmt.Println("Read", err)
+		fmt.Println("NewDatabase", err)
 		return
 	}
 
-	sqlctrl.NewTable("deviceInfo")
-	db.CheckExistTable("deviceInfo")
-	// dbChan := make(chan bool, 1)
+	deviceInfoTable, err := sqlctrl.NewTable("DeviceInfo", typedef.SystemBoardSql{})
+	if err != nil {
+		fmt.Println("NewTable", err)
+		return
+	}
+
 	exit := make(chan os.Signal, 1)
 	signal.Notify(exit, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-exit
-		// Выгрузка данных в бд
+		var deviceInfoArr []typedef.SystemBoardSql
+		for _, val := range deviceStorage {
+			var deviceInfo typedef.SystemBoardSql
+			err = utils.StructFieldsToString(val.GenericInfo.SystemBoard, &deviceInfo)
+			if err != nil {
+				fmt.Println("StructFieldsToString:", err)
+			}
+
+			deviceInfoArr = append(deviceInfoArr, deviceInfo)
+		}
+
+		_, err := db.InsertValue(deviceInfoTable, deviceInfoArr)
+		if err != nil {
+			fmt.Println("InsertValue:", err)
+		}
+
 		os.Exit(1)
 	}()
 

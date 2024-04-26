@@ -6,6 +6,18 @@ import (
 	"gopack/tagrpc"
 )
 
+type SystemBoardSql struct {
+	Id           int64  `sql:"NAME=Id, TYPE=INTEGER, PRIMARY_KEY, AUTO_INCREMENT"`
+	Manufacturer string `sql:"NAME=Manufacturer, TYPE=TEXT(64)"`
+	Product      string `sql:"NAME=Product, TYPE=TEXT(64)"`
+	Hostname     string `sql:"NAME=Hostname, TYPE=TEXT(64)"`
+	Serial       string `sql:"NAME=Serial, TYPE=TEXT(64)"`
+	Release      struct {
+		Revision string
+		Version  string
+	}
+}
+
 type SystemBoard struct {
 	Manufacturer [64]byte
 	Product      [64]byte

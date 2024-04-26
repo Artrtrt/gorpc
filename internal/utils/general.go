@@ -7,21 +7,24 @@ import (
 	"strings"
 )
 
-func ConvertFieldsStructToByte(src interface{}, dst interface{}) (err error) {
+func StructFieldsToByte(src interface{}, dst interface{}) (err error) {
 	srcValue := reflect.ValueOf(src)
 	dstValue := reflect.ValueOf(dst).Elem()
+	srcType := srcValue.Type()
+	dstType := dstValue.Type()
 	byteArrType := reflect.TypeOf([64]byte{})
-	if srcValue.NumField() != dstValue.NumField() {
-		return fmt.Errorf("%s", "Разное количество полей у структур")
-	}
-
 	for i := 0; i < srcValue.NumField(); i++ {
 		srcField := srcValue.Field(i)
-		dstField := dstValue.Field(i)
+		srcFieldName := srcType.Field(i).Name
+		dstTypeField, ok := dstType.FieldByName(srcFieldName)
+		if !ok {
+			return fmt.Errorf("%s %s", "Не найдено поле у получателя", srcFieldName)
+		}
 
+		dstField := dstValue.FieldByName(srcFieldName)
 		switch srcField.Kind() {
 		case reflect.String:
-			if dstField.Type() != byteArrType {
+			if dstTypeField.Type != byteArrType {
 				return fmt.Errorf("%s", "Поля получателя должны иметь тип [64]byte")
 			}
 
@@ -32,14 +35,60 @@ func ConvertFieldsStructToByte(src interface{}, dst interface{}) (err error) {
 
 			copy(dstField.Slice(0, len(srcBytes)).Bytes(), srcBytes)
 		case reflect.Struct:
-			if dstField.Kind() != reflect.Struct {
+			if dstTypeField.Type.Kind() != reflect.Struct {
 				return fmt.Errorf("%s", "Вложенность у структур должна совпадать")
 			}
 
-			err = ConvertFieldsStructToByte(srcField.Interface(), dstField.Addr().Interface())
+			err = StructFieldsToByte(srcField.Interface(), dstField.Addr().Interface())
 			if err != nil {
 				return err
 			}
+		default:
+			return fmt.Errorf("%s %s", "Неподдерживаемый тип поля", srcFieldName)
+		}
+	}
+
+	return
+}
+
+func StructFieldsToString(src interface{}, dst interface{}) (err error) {
+	srcValue := reflect.ValueOf(src)
+	dstValue := reflect.ValueOf(dst).Elem()
+	srcType := srcValue.Type()
+	dstType := dstValue.Type()
+	byteArrType := reflect.TypeOf([64]byte{})
+
+	for i := 0; i < srcValue.NumField(); i++ {
+		srcField := srcValue.Field(i)
+		srcFieldName := srcType.Field(i).Name
+		dstField, ok := dstType.FieldByName(srcFieldName)
+		if !ok {
+			return fmt.Errorf("%s %s", "Не найдено поле у получателя", srcFieldName)
+		}
+
+		switch srcField.Kind() {
+		case reflect.Array:
+			if srcField.Type() != byteArrType {
+				return fmt.Errorf("%s %s", "Поля исходной структуры должны иметь тип [64]byte для поля", srcFieldName)
+			}
+
+			srcBytes := make([]byte, srcField.Len())
+			for i := 0; i < srcField.Len(); i++ {
+				srcBytes[i] = srcField.Index(i).Interface().(byte)
+			}
+
+			dstValue.FieldByName(srcFieldName).SetString(ByteArrToString(srcBytes))
+		case reflect.Struct:
+			if dstField.Type.Kind() != reflect.Struct {
+				return fmt.Errorf("%s %s", "Вложенность у структур должна совпадать для поля", srcFieldName)
+			}
+
+			err = StructFieldsToString(srcField.Interface(), dstValue.FieldByName(srcFieldName).Addr().Interface())
+			if err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("%s %s", "Неподдерживаемый тип поля", srcFieldName)
 		}
 	}
 
