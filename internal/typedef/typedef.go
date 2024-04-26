@@ -77,6 +77,7 @@ func NewServerInfoControl(tcpAddr [32]byte, httpAddr [32]byte, connectionLimit u
 
 type DevicePayload struct {
 	GenericInfo  GenericInfo
+	UUID         string
 	Time         int64
 	SentToDB     bool
 	ToConnTCP    bool

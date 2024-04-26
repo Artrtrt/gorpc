@@ -1,13 +1,15 @@
 package service
 
 import (
+	"crypto/rsa"
 	"errors"
 	"fmt"
+	"time"
+
 	"gopack/tagrpc"
 	"gopack/xbyte"
 	"internal/typedef"
 	"internal/utils"
-	"time"
 )
 
 // TagRpc
@@ -19,8 +21,9 @@ const (
 )
 
 type SendClientHttpAddr struct {
-	HttpAddr      string
-	DeviceStorage *typedef.DeviceStorage
+	ServerPublicKey *rsa.PublicKey
+	HttpAddr        string
+	DeviceStorage   *typedef.DeviceStorage
 }
 
 func (data SendClientHttpAddr) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -31,19 +34,36 @@ func (data SendClientHttpAddr) Handler(n *tagrpc.Node, tag uint16, val []byte) (
 		return
 	}
 
-	SN := utils.MagicSNTransform(utils.ByteArrToString(deviceInfo.SystemBoard.Serial[:]))
-
-	err = xbyte.ByteToStruct(val, &deviceInfo)
-	if err != nil {
-		err = fmt.Errorf("ByteToStruct: %s", err)
-		return
-	}
-
+	SN := utils.ByteArrToString(deviceInfo.SystemBoard.Serial[:])
 	serverAddr := n.Storage["httpAddr"].(string)
 	addr := "http://" + data.HttpAddr + "/api/ubus/" + "?SN=" + SN + "&endpoint=http://" + serverAddr
 	(*data.DeviceStorage)[deviceInfo.SystemBoard.Serial].HttpAddrChan <- addr
 	return
 }
+
+// type GetUUID struct {
+// 	DeviceStorage *typedef.DeviceStorage
+// }
+
+// func (data GetUUID) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+// 	var deviceInfo typedef.GenericInfo
+// 	err = xbyte.ByteToStruct(val, &deviceInfo)
+// 	if err != nil {
+// 		err = fmt.Errorf("ByteToStruct: %s", err)
+// 		return
+// 	}
+
+// 	uuid := utils.GenerateUUID(utils.ByteArrToString(deviceInfo.Serial[:]))
+// 	uuidByte, err := uuid.MarshalBinary()
+// 	if err != nil {
+// 		err = fmt.Errorf("MarshalBinary: %s", err)
+// 		return
+// 	}
+
+// 	data.DeviceStorage[deviceInfo.Serial].UUID = uuid.String()
+// 	n.Response(TagGetUUID, uuidByte)
+// 	return
+// }
 
 // JsonRpc
 const (

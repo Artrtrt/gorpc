@@ -73,13 +73,12 @@ func handleCORS(next http.Handler) http.Handler {
 
 func httpServer() {
 	http.Handle("/", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		magic := r.Header.Get("SN")
-		if magic == "" {
+		serial := r.Header.Get("SN")
+		if serial == "" {
 			rw.Write([]byte("Serial не должен быть пустым"))
 			return
 		}
 
-		serial := utils.MagicSNTransform(magic)
 		conn := connectStorage.Find(serial)
 		if conn == nil {
 			rw.Write([]byte("Устройство не найдено"))

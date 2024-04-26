@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sqlctrl"
 	"syscall"
 	"time"
 
@@ -111,6 +112,14 @@ func main() {
 		return
 	}
 
+	db, err := sqlctrl.NewDatabase("sqlite", "./test.db")
+	if err != nil {
+		fmt.Println("Read", err)
+		return
+	}
+
+	sqlctrl.NewTable("deviceInfo")
+	db.CheckExistTable("deviceInfo")
 	// dbChan := make(chan bool, 1)
 	exit := make(chan os.Signal, 1)
 	signal.Notify(exit, os.Interrupt, syscall.SIGTERM)
@@ -214,8 +223,9 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				hub := TrpcHubServerHandler{
 					RemoteErr: service.RemoteErr{},
 					SendClientHttpAddr: service.SendClientHttpAddr{
-						HttpAddr:      httpAddr,
-						DeviceStorage: &deviceStorage,
+						HttpAddr:        httpAddr,
+						DeviceStorage:   &deviceStorage,
+						ServerPublicKey: clientPublicKey,
 					},
 				}
 
@@ -328,7 +338,7 @@ func receiveGenericServerInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 	}
 
 	if !utils.Contains(serverList, utils.ByteArrToString(serverInfo.SystemBoard.Serial[:])) {
-		_, err = u.Write(u.Raddr, 1, []byte("Unknown device"))
+		_, err = u.Write(u.Raddr, service.TagRemoteErr, []byte("Unknown device"))
 		return
 	}
 
@@ -336,7 +346,7 @@ func receiveGenericServerInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 		return
 	}
 
-	_, err = u.Write(u.Raddr, 1025, []byte(tpcAddr))
+	_, err = u.Write(u.Raddr, service.TagConnectToHub, []byte(tpcAddr))
 	if err != nil {
 		err = fmt.Errorf("UdpWrite: %s", err)
 		return
@@ -361,18 +371,16 @@ func receiveGenericDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 		data.GenericInfo = deviceInfo
 		deviceStorage[deviceInfo.SystemBoard.Serial] = data
 		if data.ToConnTCP && !deviceInfo.Busy {
-			_, err = u.Write(u.Raddr, 1025, []byte(tpcAddr))
+			_, err = u.Write(u.Raddr, service.TagConnectToHub, []byte(tpcAddr))
 			if err != nil {
 				err = fmt.Errorf("UdpWrite: %s", err)
 				return
 			}
 		}
-		// fmt.Printf("Данные о роутере %s обновились\n", string(deviceInfo.SN[:]))
 	} else {
 		deviceStorage[deviceInfo.SystemBoard.Serial] = typedef.DevicePayload{
-			GenericInfo: deviceInfo, Time: time, SentToDB: false, ToConnTCP: false, HttpAddrChan: make(chan string, 1),
+			GenericInfo: deviceInfo, UUID: "", Time: time, SentToDB: false, ToConnTCP: false, HttpAddrChan: make(chan string, 1),
 		}
-		// fmt.Printf("Роутер %s добавлен\n", deviceInfo.SN)
 	}
 
 	return

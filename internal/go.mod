@@ -1,4 +1,4 @@
-module git.kroks.ru/Kroks/gorpc/internal
+module gorpc/internal
 
 go 1.20
 
@@ -9,6 +9,7 @@ replace gopack/jsonrpc => ../../gopack/jsonrpc/
 replace gopack/xbyte => ../../gopack/xbyte/
 
 require (
+	github.com/google/uuid v1.6.0 // indirect
 	golang.org/x/crypto v0.7.0 // indirect
 	golang.org/x/sys v0.6.0 // indirect
 	gopack/jsonrpc v0.0.0-00010101000000-000000000000 // indirect

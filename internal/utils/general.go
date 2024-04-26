@@ -52,13 +52,16 @@ func ByteArrToString(arr []byte) string {
 	}))
 }
 
-func MagicSNTransform(SN string) string {
-	runes := []rune(SN)
-	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
-		runes[i], runes[j] = runes[j], runes[i]
-	}
-	return string(runes)
-}
+// func GenerateUUID(serialNumber string) uuid.UUID {
+// 	uniqueInfo := serialNumber + time.Now().Format("20060102150405.000")
+// 	uniqueBytes := []byte(uniqueInfo)
+
+// 	hasher := md5.New()
+// 	hasher.Write(uniqueBytes)
+// 	hash := hasher.Sum(nil)
+// 	uuid.NewMD5(uuid.UUID{}, hash)
+// 	return uuid.NewMD5(uuid.UUID{}, hash)
+// }
 
 func Contains(arr []string, str string) bool {
 	for _, val := range arr {
