@@ -7,14 +7,6 @@ import (
 	"internal/utils"
 )
 
-type SystemBoardSql struct {
-	Id           int64  `sql:"NAME=Id, TYPE=INTEGER, PRIMARY_KEY, AUTO_INCREMENT"`
-	Manufacturer string `sql:"NAME=Manufacturer, TYPE=TEXT(64)"`
-	Product      string `sql:"NAME=Product, TYPE=TEXT(64)"`
-	Hostname     string `sql:"NAME=Hostname, TYPE=TEXT(64)"`
-	Serial       string `sql:"NAME=Serial, TYPE=TEXT(64)"`
-}
-
 type SystemBoard struct {
 	Manufacturer [64]byte
 	Product      [64]byte
@@ -41,7 +33,6 @@ type DeviceInfo struct {
 type DevicePayload struct {
 	UUID         string
 	Time         uint64
-	SentToDB     bool
 	ToConnTCP    bool
 	HttpAddrChan chan string
 }
@@ -92,12 +83,14 @@ func NewServerInfoControl(tcpAddr [32]byte, httpAddr [32]byte, connectionLimit u
 }
 
 type Info struct {
-	Type          string
+	Type     string
+	Conn     *tagrpc.TCPConn
+	SentToDB bool
+
 	GenericInfo   *GenericInfo
 	DeviceInfo    *DeviceInfo
 	DevicePayload *DevicePayload
 	ServerInfo    *ServerInfo
-	Conn          *tagrpc.TCPConn
 }
 
 func (i Info) MatchGenericInfo(genericInfo GenericInfo) bool {
@@ -163,4 +156,13 @@ func (s Storage) LessBusyServer() (conn *tagrpc.TCPConn, addr [32]byte, err erro
 	}
 
 	return
+}
+
+type ToSql struct {
+	Id           int64  `sql:"NAME=Id, TYPE=INTEGER, PRIMARY_KEY, AUTO_INCREMENT"`
+	Manufacturer string `sql:"NAME=Manufacturer, TYPE=TEXT(64)"`
+	Product      string `sql:"NAME=Product, TYPE=TEXT(64)"`
+	Hostname     string `sql:"NAME=Hostname, TYPE=TEXT(64)"`
+	Serial       string `sql:"NAME=Serial, TYPE=TEXT(64)"`
+	Type         string `sql:"NAME=Type, TYPE=TEXT(64)"`
 }

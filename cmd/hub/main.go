@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sqlctrl"
 	"syscall"
 	"time"
 
@@ -109,39 +110,48 @@ func main() {
 		return
 	}
 
-	// db, err := sqlctrl.NewDatabase("sqlite", "./test.db")
-	// if err != nil {
-	// 	fmt.Println("NewDatabase", err)
-	// 	return
-	// }
+	db, err := sqlctrl.NewDatabase("sqlite", "./test.db")
+	if err != nil {
+		fmt.Println("NewDatabase", err)
+		return
+	}
 
-	// deviceInfoTable, err := sqlctrl.NewTable("DeviceInfo", typedef.SystemBoardSql{})
-	// if err != nil {
-	// 	fmt.Println("NewTable", err)
-	// 	return
-	// }
+	deviceInfoTable, err := sqlctrl.NewTable("DeviceInfo", typedef.ToSql{})
+	if err != nil {
+		fmt.Println("NewTable", err)
+		return
+	}
+
+	if !db.CheckExistTable(deviceInfoTable) {
+		err = db.CreateTable(deviceInfoTable)
+		if err != nil {
+			fmt.Println("CreateTable", err)
+			return
+		}
+	}
 
 	exit := make(chan os.Signal, 1)
+	dbChan := make(chan bool, 1)
 	signal.Notify(exit, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-exit
-		// var deviceInfoArr []typedef.SystemBoardSql
-		// for _, val := range storage {
-		// 	var deviceInfo typedef.SystemBoardSql
-		// 	err = utils.StructFieldsToString(val.GenericInfo.SystemBoard, &deviceInfo)
-		// 	if err != nil {
-		// 		fmt.Println("StructFieldsToString:", err)
-		// 	}
-
-		// 	deviceInfoArr = append(deviceInfoArr, deviceInfo)
-		// }
-
-		// _, err := db.InsertValue(deviceInfoTable, deviceInfoArr)
-		// if err != nil {
-		// 	fmt.Println("InsertValue:", err)
-		// }
+		_, err = toSql(db, deviceInfoTable, dbChan)
+		if err != nil {
+			fmt.Println("toSql", err)
+		}
 
 		os.Exit(1)
+	}()
+
+	go func() {
+		for {
+			_, err = toSql(db, deviceInfoTable, dbChan)
+			if err != nil {
+				fmt.Println("toSql", err)
+			}
+
+			time.Sleep(time.Hour)
+		}
 	}()
 
 	udp, err := udprpc.NewUdp(udpAddr)
@@ -419,9 +429,46 @@ func receiveGenericDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 			GenericInfo: &genericInfo,
 			DeviceInfo:  &typedef.DeviceInfo{},
 			DevicePayload: &typedef.DevicePayload{
-				UUID: "", Time: time, SentToDB: false, ToConnTCP: false, HttpAddrChan: make(chan string, 1),
+				UUID: "", Time: time, ToConnTCP: false, HttpAddrChan: make(chan string, 1),
 			},
 		}
+	}
+
+	return
+}
+
+func toSql(db *sqlctrl.DataBase, table *sqlctrl.Table, mutex chan bool) (lastId int64, err error) {
+	mutex <- true
+	defer func() {
+		<-mutex
+	}()
+
+	var rowArr []typedef.ToSql
+	for _, val := range storage {
+		if val.SentToDB {
+			continue
+		}
+
+		var row typedef.ToSql
+		err = utils.StructFieldsToString(val.GenericInfo.SystemBoard, &row)
+		if err != nil {
+			err = fmt.Errorf("%s: %s", "StructFieldsToString", err)
+			return
+		}
+
+		row.Type = val.Type
+		val.SentToDB = true
+		rowArr = append(rowArr, row)
+	}
+
+	if len(rowArr) == 0 {
+		return
+	}
+
+	lastId, err = db.InsertValue(table, rowArr)
+	if err != nil {
+		err = fmt.Errorf("%s: %s", "InsertValue", err)
+		return
 	}
 
 	return
