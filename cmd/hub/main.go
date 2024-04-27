@@ -3,13 +3,11 @@ package main
 import (
 	"crypto/rsa"
 	"encoding/csv"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"sqlctrl"
 	"syscall"
 	"time"
 
@@ -45,9 +43,8 @@ var (
 	tpcAddr  string = "192.168.1.163:8080"
 	httpAddr string = "localhost:8081"
 
-	serverList    []string
-	deviceStorage = typedef.DeviceStorage{}
-	serverStorage = typedef.ServerStorage{}
+	serverList []string
+	storage    = typedef.Storage{}
 )
 
 func handleCORS(next http.Handler) http.Handler {
@@ -67,7 +64,7 @@ func handleCORS(next http.Handler) http.Handler {
 func httpServer() {
 	hub := JrpcHubHandler{
 		ReceiveSN: service.ReceiveSN{
-			DeviceStorage: &deviceStorage,
+			Storage: &storage,
 		},
 	}
 
@@ -112,37 +109,37 @@ func main() {
 		return
 	}
 
-	db, err := sqlctrl.NewDatabase("sqlite", "./test.db")
-	if err != nil {
-		fmt.Println("NewDatabase", err)
-		return
-	}
+	// db, err := sqlctrl.NewDatabase("sqlite", "./test.db")
+	// if err != nil {
+	// 	fmt.Println("NewDatabase", err)
+	// 	return
+	// }
 
-	deviceInfoTable, err := sqlctrl.NewTable("DeviceInfo", typedef.SystemBoardSql{})
-	if err != nil {
-		fmt.Println("NewTable", err)
-		return
-	}
+	// deviceInfoTable, err := sqlctrl.NewTable("DeviceInfo", typedef.SystemBoardSql{})
+	// if err != nil {
+	// 	fmt.Println("NewTable", err)
+	// 	return
+	// }
 
 	exit := make(chan os.Signal, 1)
 	signal.Notify(exit, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-exit
-		var deviceInfoArr []typedef.SystemBoardSql
-		for _, val := range deviceStorage {
-			var deviceInfo typedef.SystemBoardSql
-			err = utils.StructFieldsToString(val.GenericInfo.SystemBoard, &deviceInfo)
-			if err != nil {
-				fmt.Println("StructFieldsToString:", err)
-			}
+		// var deviceInfoArr []typedef.SystemBoardSql
+		// for _, val := range storage {
+		// 	var deviceInfo typedef.SystemBoardSql
+		// 	err = utils.StructFieldsToString(val.GenericInfo.SystemBoard, &deviceInfo)
+		// 	if err != nil {
+		// 		fmt.Println("StructFieldsToString:", err)
+		// 	}
 
-			deviceInfoArr = append(deviceInfoArr, deviceInfo)
-		}
+		// 	deviceInfoArr = append(deviceInfoArr, deviceInfo)
+		// }
 
-		_, err := db.InsertValue(deviceInfoTable, deviceInfoArr)
-		if err != nil {
-			fmt.Println("InsertValue:", err)
-		}
+		// _, err := db.InsertValue(deviceInfoTable, deviceInfoArr)
+		// if err != nil {
+		// 	fmt.Println("InsertValue:", err)
+		// }
 
 		os.Exit(1)
 	}()
@@ -187,10 +184,11 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			for {
 				err = conn.Update(time.Second * 60)
 				if err != nil {
-					_, ok := serverStorage[conn]
-					if ok {
-						delete(serverStorage, conn)
+					info := conn.Storage["info"].(*typedef.Info)
+					if info.Type == "server" {
+						delete(storage, info.GenericInfo.SystemBoard.Serial)
 					}
+
 					conn.Close()
 					fmt.Printf("Отключился %s. Ошибка: %s \n", addr, err.Error())
 					break
@@ -232,17 +230,20 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
-			if utils.Contains(serverList, utils.ByteArrToString(genericInfo.SystemBoard.Serial[:])) {
-				if serverStorage.Contains(genericInfo.SystemBoard.Serial) {
-					return
-				}
+			serial := genericInfo.SystemBoard.Serial
+			if !storage[serial].MatchGenericInfo(genericInfo) {
+				fmt.Println("Not match genericInfo:", err)
+				return
+			}
 
-				serverStorage[conn] = typedef.ServerPayload{GenericInfo: &genericInfo, ServerInfo: nil}
+			info := storage[serial]
+			conn.Storage["info"] = info
+			if info.WhitelistContainsServer(serverList) {
 				hub := TrpcHubServerHandler{
 					RemoteErr: service.RemoteErr{},
 					SendClientHttpAddr: service.SendClientHttpAddr{
 						HttpAddr:        httpAddr,
-						DeviceStorage:   &deviceStorage,
+						Storage:         &storage,
 						ServerPublicKey: clientPublicKey,
 					},
 				}
@@ -255,30 +256,45 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					return
 				}
 
-				conn.Storage["httpAddr"] = utils.ByteArrToString(serverInfo.HttpAddr[:])
+				info.ServerInfo = &serverInfo
+				info.Conn = conn
 				for {
-					err = updateServerInfo(conn)
+					err = updateServerInfo(serial)
 					if err != nil {
 						fmt.Println("updateServerInfo:", err)
 						return
 					}
 					time.Sleep(time.Second * 20)
 				}
-			} else if deviceStorage.Contains(genericInfo.SystemBoard.Serial) {
+			} else if storage.RouterExist(genericInfo.SystemBoard.Serial) {
 				hub := TrpcHubDeviceHandler{
 					RemoteErr: service.RemoteErr{},
 				}
 
 				conn.HandleFunc(service.TagRemoteErr, hub.RemoteErr.Handler)
-				serverConn, serverAddr, err := serverStorage.LessBusyServer()
+				serverConn, serverAddr, err := storage.LessBusyServer()
 				if err != nil {
 					conn.Request(1, []byte(err.Error()))
 					return
 				}
 
+				deviceInfoByte, err := conn.Execute(service.TagGetDeviceInfo, []byte{})
+				if err != nil {
+					fmt.Println("Execute:", err)
+					return
+				}
+
+				var deviceInfo typedef.DeviceInfo
+				err = xbyte.ByteToStruct(deviceInfoByte, &deviceInfo)
+				if err != nil {
+					fmt.Println("ByteToStruct:", err)
+					return
+				}
+
+				info.DeviceInfo = &deviceInfo
 				_, err = serverConn.Execute(service.TagSendInfoToServer, responseGenericInfo)
 				if err != nil {
-					fmt.Println("Request:", err)
+					fmt.Println("Execute:", err)
 					return
 				}
 
@@ -288,9 +304,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					return
 				}
 
-				tmp := deviceStorage[genericInfo.SystemBoard.Serial]
-				tmp.ToConnTCP = false
-				deviceStorage[genericInfo.SystemBoard.Serial] = tmp
+				info.DevicePayload.ToConnTCP = false
 				conn.Close()
 			} else {
 				conn.Close()
@@ -315,21 +329,19 @@ func getServerInfo(conn *tagrpc.TCPConn) (serverInfo typedef.ServerInfo, err err
 	return
 }
 
-func updateServerInfo(conn *tagrpc.TCPConn) (err error) {
-	_, ok := serverStorage[conn]
+func updateServerInfo(serial [64]byte) (err error) {
+	device, ok := storage[serial]
 	if !ok {
-		return errors.New("server not connect")
+		return
 	}
 
-	serverInfo, err := getServerInfo(conn)
+	serverInfo, err := getServerInfo(device.Conn)
 	if err != nil {
 		err = fmt.Errorf("%s %s", "getServerInfo", err.Error())
 		return
 	}
 
-	server := serverStorage[conn]
-	server.ServerInfo = &serverInfo
-	serverStorage[conn] = server
+	device.ServerInfo = &serverInfo
 	return
 }
 
@@ -348,22 +360,31 @@ func configureUdp(udp *udprpc.Udp) {
 }
 
 func receiveGenericServerInfo(u *udprpc.Udp, tag uint16, val []byte) (err error) {
-	serverInfo := typedef.GenericInfo{}
-	err = xbyte.ByteToStruct(val, &serverInfo)
+	genericInfo := typedef.GenericInfo{}
+	err = xbyte.ByteToStruct(val, &genericInfo)
 	if err != nil {
 		err = fmt.Errorf("ByteToStruct: %s", err)
 		return
 	}
 
-	if !utils.Contains(serverList, utils.ByteArrToString(serverInfo.SystemBoard.Serial[:])) {
+	info := &typedef.Info{
+		Type:        "server",
+		GenericInfo: &genericInfo,
+		ServerInfo:  &typedef.ServerInfo{},
+	}
+
+	if !info.WhitelistContainsServer(serverList) {
 		_, err = u.Write(u.Raddr, service.TagRemoteErr, []byte("Unknown device"))
 		return
 	}
 
-	if serverInfo.Busy {
+	serial := genericInfo.SystemBoard.Serial
+	_, ok := storage[serial]
+	if ok {
 		return
 	}
 
+	storage[serial] = info
 	_, err = u.Write(u.Raddr, service.TagConnectToHub, []byte(tpcAddr))
 	if err != nil {
 		err = fmt.Errorf("UdpWrite: %s", err)
@@ -374,21 +395,18 @@ func receiveGenericServerInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 }
 
 func receiveGenericDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error) {
-	deviceInfo := typedef.GenericInfo{}
-	err = xbyte.ByteToStruct(val, &deviceInfo)
+	genericInfo := typedef.GenericInfo{}
+	err = xbyte.ByteToStruct(val, &genericInfo)
 	if err != nil {
 		err = fmt.Errorf("ByteToStruct: %s", err)
 		return
 	}
 
-	time := time.Now().Unix()
-	_, ok := deviceStorage[deviceInfo.SystemBoard.Serial]
+	time := uint64(time.Now().Unix())
+	info, ok := storage[genericInfo.SystemBoard.Serial]
 	if ok {
-		data := deviceStorage[deviceInfo.SystemBoard.Serial]
-		data.Time = time
-		data.GenericInfo = deviceInfo
-		deviceStorage[deviceInfo.SystemBoard.Serial] = data
-		if data.ToConnTCP && !deviceInfo.Busy {
+		info.DevicePayload.Time = time
+		if info.DevicePayload.ToConnTCP && !info.DeviceInfo.Busy {
 			_, err = u.Write(u.Raddr, service.TagConnectToHub, []byte(tpcAddr))
 			if err != nil {
 				err = fmt.Errorf("UdpWrite: %s", err)
@@ -396,8 +414,13 @@ func receiveGenericDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 			}
 		}
 	} else {
-		deviceStorage[deviceInfo.SystemBoard.Serial] = typedef.DevicePayload{
-			GenericInfo: deviceInfo, UUID: "", Time: time, SentToDB: false, ToConnTCP: false, HttpAddrChan: make(chan string, 1),
+		storage[genericInfo.SystemBoard.Serial] = &typedef.Info{
+			Type:        "router",
+			GenericInfo: &genericInfo,
+			DeviceInfo:  &typedef.DeviceInfo{},
+			DevicePayload: &typedef.DevicePayload{
+				UUID: "", Time: time, SentToDB: false, ToConnTCP: false, HttpAddrChan: make(chan string, 1),
+			},
 		}
 	}
 

@@ -10,6 +10,13 @@ import (
 	"internal/utils"
 )
 
+type SystemBoard struct {
+	Manufacturer string
+	Product      string
+	Hostname     string
+	Serial       string
+}
+
 func GetSystemBoardInfo() (info typedef.SystemBoard, err error) {
 	cmd := exec.Command("ubus", "call", "system", "board")
 	byteArr, err := cmd.Output()
@@ -18,7 +25,7 @@ func GetSystemBoardInfo() (info typedef.SystemBoard, err error) {
 		return
 	}
 
-	var jsonInfo typedef.SystemBoardSql
+	var jsonInfo SystemBoard
 	err = json.Unmarshal([]byte(byteArr), &jsonInfo)
 	if err != nil {
 		err = fmt.Errorf("%s %s", "Unmarshal", err.Error())

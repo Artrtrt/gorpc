@@ -18,12 +18,13 @@ const (
 	TagConnectToServer  = 1026
 	TagSendInfoToServer = 1027
 	TagGetServerInfo    = 1028
+	TagGetDeviceInfo    = 1029
 )
 
 type SendClientHttpAddr struct {
 	ServerPublicKey *rsa.PublicKey
 	HttpAddr        string
-	DeviceStorage   *typedef.DeviceStorage
+	Storage         *typedef.Storage
 }
 
 func (data SendClientHttpAddr) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -35,9 +36,9 @@ func (data SendClientHttpAddr) Handler(n *tagrpc.Node, tag uint16, val []byte) (
 	}
 
 	SN := utils.ByteArrToString(deviceInfo.SystemBoard.Serial[:])
-	serverAddr := n.Storage["httpAddr"].(string)
-	addr := "http://" + data.HttpAddr + "/api/ubus/" + "?SN=" + SN + "&endpoint=http://" + serverAddr
-	(*data.DeviceStorage)[deviceInfo.SystemBoard.Serial].HttpAddrChan <- addr
+	info := n.Storage["info"].(*typedef.Info)
+	addr := "http://" + data.HttpAddr + "/api/ubus/" + "?SN=" + SN + "&endpoint=http://" + utils.ByteArrToString(info.ServerInfo.HttpAddr[:])
+	(*data.Storage)[deviceInfo.SystemBoard.Serial].DevicePayload.HttpAddrChan <- addr
 	return
 }
 
@@ -71,7 +72,7 @@ const (
 )
 
 type ReceiveSN struct {
-	DeviceStorage *typedef.DeviceStorage
+	Storage *typedef.Storage
 }
 
 func (data ReceiveSN) Handler(req interface{}) (resp interface{}, err error) {
@@ -82,34 +83,39 @@ func (data ReceiveSN) Handler(req interface{}) (resp interface{}, err error) {
 
 	SNBytes := [64]byte{}
 	copy(SNBytes[:], []byte(req.(string)))
-	_, ok := (*data.DeviceStorage)[SNBytes]
+	_, ok := (*data.Storage)[SNBytes]
 	if !ok {
 		err = errors.New("Запрашиваемое устройство не найдено")
 		return
 	}
 
-	device := (*data.DeviceStorage)[SNBytes]
-	if time.Now().Unix()-device.Time > 120 {
-		err = errors.New("Устройство не доступно")
+	device := (*data.Storage)[SNBytes]
+	if device.Type != "router" {
+		err = errors.New("Устройство не является роутером")
 		return
 	}
 
-	payload := (*data.DeviceStorage)[SNBytes]
-	if payload.ToConnTCP || payload.GenericInfo.Busy {
+	if time.Now().Unix()-int64(device.DevicePayload.Time) > 120 {
+		err = errors.New("Устройство недоступно")
+		return
+	}
+
+	if device.DevicePayload.ToConnTCP || device.DeviceInfo.Busy {
 		err = errors.New("Устройство занято")
 		return
 	}
 
-	payload.ToConnTCP = true
-	(*data.DeviceStorage)[SNBytes] = payload
+	device.DevicePayload.ToConnTCP = true
+	// payload = device.DevicePayload
+	// (*data.Storage)[SNBytes] = payload
 
 	select {
 	case <-time.After(time.Second * 20):
-		payload.ToConnTCP = false
-		(*data.DeviceStorage)[SNBytes] = payload
+		device.DevicePayload.ToConnTCP = false
+		// (*data.DeviceStorage)[SNBytes] = payload
 		err = errors.New("Ошибка при подключении к устройству")
 		return
-	case resp = <-(*data.DeviceStorage)[SNBytes].HttpAddrChan:
+	case resp = <-device.DevicePayload.HttpAddrChan:
 	}
 
 	return

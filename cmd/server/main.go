@@ -116,14 +116,8 @@ func main() {
 		return
 	}
 
-	uptime, err := telemetry.GetDeviceUptime()
-	if err != nil {
-		fmt.Println("GetUptime:", err)
-		return
-	}
-
 	fmt.Println(string(systemBoard.Serial[:]))
-	genericInfo = &typedef.GenericInfo{SystemBoard: systemBoard, Uptime: uptime, Busy: false}
+	genericInfo = &typedef.GenericInfo{SystemBoard: systemBoard}
 
 	privateKey, err = utils.PemToPrivateKey("private.pem")
 	if err != nil {
@@ -274,10 +268,6 @@ func configureUdp(udp *udprpc.Udp) {
 }
 
 func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
-	if genericInfo.Busy {
-		return
-	}
-
 	hubAddr, err := net.ResolveTCPAddr("tcp", string(val))
 	if err != nil {
 		err = fmt.Errorf("ResolveTCPAddr: %s", err)
@@ -313,16 +303,11 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 	hubConn.HandleFunc(service.TagGetServerInfo, server.SendServerInfo.Handler)
 	fmt.Println("Подключился к хабу")
 	go func(*tagrpc.TCPConn) {
-		genericInfo.Busy = true
-		defer func() {
-			genericInfo.Busy = false
-		}()
-
 		for {
 			err = hubConn.Update(time.Second * 60)
 			if err != nil {
 				hubConn.Close()
-				fmt.Printf("Отключился от хаба. Ошибка: %s \n", err.Error())
+				fmt.Printf("Отключился от хаба. Ошибка: %s\n", err.Error())
 				return
 			}
 		}

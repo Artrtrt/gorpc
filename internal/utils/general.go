@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
-	"strings"
 )
 
 func StructFieldsToByte(src interface{}, dst interface{}) (err error) {
@@ -111,12 +110,3 @@ func ByteArrToString(arr []byte) string {
 // 	uuid.NewMD5(uuid.UUID{}, hash)
 // 	return uuid.NewMD5(uuid.UUID{}, hash)
 // }
-
-func Contains(arr []string, str string) bool {
-	for _, val := range arr {
-		if strings.Contains(val, str) {
-			return true
-		}
-	}
-	return false
-}

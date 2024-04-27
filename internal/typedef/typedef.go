@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"gopack/tagrpc"
+	"internal/utils"
 )
 
 type SystemBoardSql struct {
@@ -12,10 +13,6 @@ type SystemBoardSql struct {
 	Product      string `sql:"NAME=Product, TYPE=TEXT(64)"`
 	Hostname     string `sql:"NAME=Hostname, TYPE=TEXT(64)"`
 	Serial       string `sql:"NAME=Serial, TYPE=TEXT(64)"`
-	Release      struct {
-		Revision string
-		Version  string
-	}
 }
 
 type SystemBoard struct {
@@ -23,16 +20,10 @@ type SystemBoard struct {
 	Product      [64]byte
 	Hostname     [64]byte
 	Serial       [64]byte
-	Release      struct {
-		Revision [64]byte
-		Version  [64]byte
-	}
 }
 
 type GenericInfo struct {
 	SystemBoard SystemBoard
-	Uptime      uint64
-	Busy        bool
 }
 
 type ServerInfo struct {
@@ -40,6 +31,19 @@ type ServerInfo struct {
 	HttpAddr        [32]byte
 	ConnectionCount uint32
 	ConnectionLimit uint32
+}
+
+type DeviceInfo struct {
+	Uptime uint64
+	Busy   bool
+}
+
+type DevicePayload struct {
+	UUID         string
+	Time         uint64
+	SentToDB     bool
+	ToConnTCP    bool
+	HttpAddrChan chan string
 }
 
 type ServerInfoControl struct {
@@ -87,21 +91,43 @@ func NewServerInfoControl(tcpAddr [32]byte, httpAddr [32]byte, connectionLimit u
 	}
 }
 
-type DevicePayload struct {
-	GenericInfo  GenericInfo
-	UUID         string
-	Time         int64
-	SentToDB     bool
-	ToConnTCP    bool
-	HttpAddrChan chan string
+type Info struct {
+	Type          string
+	GenericInfo   *GenericInfo
+	DeviceInfo    *DeviceInfo
+	DevicePayload *DevicePayload
+	ServerInfo    *ServerInfo
+	Conn          *tagrpc.TCPConn
 }
 
-type DeviceStorage map[[64]byte]DevicePayload
+func (i Info) MatchGenericInfo(genericInfo GenericInfo) bool {
+	if i.GenericInfo.SystemBoard.Hostname != genericInfo.SystemBoard.Hostname {
+		return false
+	}
 
-// FIXIT
-func (s DeviceStorage) Contains(SN [64]byte) bool {
-	for _, payload := range s {
-		if payload.GenericInfo.SystemBoard.Serial == SN {
+	if i.GenericInfo.SystemBoard.Manufacturer != genericInfo.SystemBoard.Manufacturer {
+		return false
+	}
+
+	if i.GenericInfo.SystemBoard.Product != genericInfo.SystemBoard.Product {
+		return false
+	}
+
+	if i.GenericInfo.SystemBoard.Serial != genericInfo.SystemBoard.Serial {
+		return false
+	}
+
+	return true
+}
+
+func (i Info) WhitelistContainsServer(whitelist []string) bool {
+	if i.Type != "server" {
+		return false
+	}
+
+	serial := utils.ByteArrToString(i.GenericInfo.SystemBoard.Serial[:])
+	for _, val := range whitelist {
+		if val == serial {
 			return true
 		}
 	}
@@ -109,38 +135,32 @@ func (s DeviceStorage) Contains(SN [64]byte) bool {
 	return false
 }
 
-type ServerPayload struct {
-	GenericInfo *GenericInfo
-	ServerInfo  *ServerInfo
+type Storage map[[64]byte]*Info
+
+func (s Storage) RouterExist(serial [64]byte) bool {
+	_, ok := s[serial]
+	return ok && s[serial].Type == "router"
 }
 
-type ServerStorage map[*tagrpc.TCPConn]ServerPayload
-
-// FIXIT
-func (s ServerStorage) Contains(SN [64]byte) bool {
-	for _, payload := range s {
-		if payload.GenericInfo.SystemBoard.Serial == SN {
-			return true
-		}
-	}
-
-	return false
-}
-
-func (s ServerStorage) LessBusyServer() (conn *tagrpc.TCPConn, addr [32]byte, err error) {
-	if len(s) == 0 {
-		err = fmt.Errorf("%s", "No servers")
-		return
-	}
-
+func (s Storage) LessBusyServer() (conn *tagrpc.TCPConn, addr [32]byte, err error) {
 	maxFreeConn := 0
-	for key, server := range s {
-		freeConn := server.ServerInfo.ConnectionLimit - server.ServerInfo.ConnectionCount
+	for _, info := range s {
+		if info.Type != "server" || info.ServerInfo == nil {
+			continue
+		}
+
+		freeConn := info.ServerInfo.ConnectionLimit - info.ServerInfo.ConnectionCount
 		if freeConn > uint32(maxFreeConn) {
-			addr = server.ServerInfo.TcpAddr
-			conn = key
+			addr = info.ServerInfo.TcpAddr
+			conn = info.Conn
 			maxFreeConn = int(freeConn)
 		}
 	}
+
+	if conn == nil {
+		err = fmt.Errorf("%s", "No servers available")
+		return
+	}
+
 	return
 }
