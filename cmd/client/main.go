@@ -17,12 +17,14 @@ import (
 
 type TrpcClientHubHandler struct {
 	service.TrpcDefaultHandler
+	service.GetDeviceInfo
 	service.ConnectToServer
 }
 
 var (
 	privateKey  *rsa.PrivateKey
 	genericInfo *typedef.GenericInfo
+	deviceInfo  *typedef.DeviceInfo
 
 	hubUDPAddr string = "192.168.1.163:2000"
 )
@@ -34,14 +36,18 @@ func main() {
 		return
 	}
 
+	fmt.Println(string(systemBoard.Serial[:]))
+	genericInfo = &typedef.GenericInfo{SystemBoard: systemBoard}
+
 	uptime, err := telemetry.GetDeviceUptime()
 	if err != nil {
 		fmt.Println("GetUptime:", err)
 		return
 	}
 
-	fmt.Println(string(systemBoard.Serial[:]))
-	genericInfo = &typedef.GenericInfo{SystemBoard: systemBoard, Uptime: uptime, Busy: false}
+	deviceInfo = &typedef.DeviceInfo{
+		Uptime: uptime, Busy: false,
+	}
 
 	privateKey, err = utils.PemToPrivateKey("private.pem")
 	if err != nil {
@@ -92,7 +98,7 @@ func configureUdp(udp *udprpc.Udp) {
 }
 
 func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
-	if genericInfo.Busy {
+	if deviceInfo.Busy {
 		return
 	}
 
@@ -120,14 +126,19 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 
 	client := TrpcClientHubHandler{
 		TrpcDefaultHandler: trpcDefault,
+		GetDeviceInfo: service.GetDeviceInfo{
+			DeviceInfo: deviceInfo,
+		},
 		ConnectToServer: service.ConnectToServer{
 			TrpcDefaultHandler: trpcDefault,
 			ExecuteJsonRPC:     service.ExecuteJsonRPC{},
+			DeviceInfo:         deviceInfo,
 		},
 	}
 	conn.HandleFunc(service.TagRemoteErr, client.RemoteErr.Handler)
 	conn.HandleFunc(service.TagRsaSetup, client.RsaSetup.Handler)
 	conn.HandleFunc(service.TagSendGenericInfo, client.SendGenericInfo.Handler)
+	conn.HandleFunc(service.TagGetDeviceInfo, client.GetDeviceInfo.Handler)
 	conn.HandleFunc(service.TagConnectToServer, client.ConnectToServer.Handler)
 
 	fmt.Println("Подключился к хабу")

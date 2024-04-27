@@ -3,26 +3,50 @@ package service
 import (
 	"bytes"
 	"fmt"
-	"gopack/tagrpc"
 	"io"
 	"net"
 	"net/http"
 	"time"
+
+	"gopack/tagrpc"
+	"gopack/xbyte"
+	"internal/typedef"
 )
 
 const (
 	TagSendClientInfoUdp = 3073
 )
 
+type GetDeviceInfo struct {
+	*typedef.DeviceInfo
+}
+
+func (data GetDeviceInfo) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	deviceInfo, err := xbyte.StructToByte(*data.DeviceInfo)
+	if err != nil {
+		err = fmt.Errorf("StructToByte: %s", err)
+		return
+	}
+
+	err = n.Response(TagGetDeviceInfo, deviceInfo)
+	if err != nil {
+		err = fmt.Errorf("%s %s", "Response:", err)
+		return
+	}
+
+	return
+}
+
 type ConnectToServer struct {
 	TrpcDefaultHandler
 	ExecuteJsonRPC
+	*typedef.DeviceInfo
 }
 
 func (data ConnectToServer) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	defer n.Response(TagConnectToServer, []byte("OK"))
 
-	if data.TrpcDefaultHandler.GenericInfo.Busy {
+	if data.DeviceInfo.Busy {
 		return
 	}
 
@@ -49,11 +73,11 @@ func (data ConnectToServer) Handler(n *tagrpc.Node, tag uint16, val []byte) (err
 	fmt.Printf("Подключился к серверу %s\n", conn.Tcp.RemoteAddr())
 
 	go func(*tagrpc.TCPConn) {
-		data.TrpcDefaultHandler.GenericInfo.Busy = true
+		data.DeviceInfo.Busy = true
 		for {
 			err = conn.Update(time.Second * 60)
 			if err != nil {
-				data.TrpcDefaultHandler.GenericInfo.Busy = false
+				data.DeviceInfo.Busy = false
 				fmt.Println(err)
 				return
 			}
