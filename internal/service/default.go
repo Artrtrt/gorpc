@@ -13,12 +13,14 @@ const (
 	TagRemoteErr       = 1
 	TagRsaSetup        = 2
 	TagSendGenericInfo = 3
+	TagChaCha20Setup   = 4
 )
 
 type TrpcDefaultHandler struct {
 	RemoteErr
 	RsaSetup
 	SendGenericInfo
+	ChaCha20Setup
 }
 
 type RemoteErr struct {
@@ -52,6 +54,16 @@ func (data RsaSetup) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error)
 	}
 
 	n.Codec = tagrpc.NewRsaCodec(data.PrivateKey, rPublicKey)
+	return
+}
+
+type ChaCha20Setup struct {
+	GenericInfo *typedef.GenericInfo
+}
+
+func (data ChaCha20Setup) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
+	n.Codec = tagrpc.NewChaCha20Codec(data.GenericInfo.SystemBoard.Serial[:], data.GenericInfo.SystemBoard.Serial[:])
+	n.Response(TagChaCha20Setup, []byte("OK"))
 	return
 }
 

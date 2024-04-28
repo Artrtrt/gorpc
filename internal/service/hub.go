@@ -100,19 +100,17 @@ func (data ReceiveSN) Handler(req interface{}) (resp interface{}, err error) {
 		return
 	}
 
-	if device.DevicePayload.ToConnTCP || device.DeviceInfo.Busy {
+	fmt.Println(device.DevicePayload.ToConnTCP, device.GenericInfo.Busy)
+	if device.DevicePayload.ToConnTCP || device.GenericInfo.Busy {
 		err = errors.New("Устройство занято")
 		return
 	}
 
 	device.DevicePayload.ToConnTCP = true
-	// payload = device.DevicePayload
-	// (*data.Storage)[SNBytes] = payload
 
 	select {
 	case <-time.After(time.Second * 20):
 		device.DevicePayload.ToConnTCP = false
-		// (*data.DeviceStorage)[SNBytes] = payload
 		err = errors.New("Ошибка при подключении к устройству")
 		return
 	case resp = <-device.DevicePayload.HttpAddrChan:

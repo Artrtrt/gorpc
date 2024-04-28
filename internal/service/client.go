@@ -9,44 +9,23 @@ import (
 	"time"
 
 	"gopack/tagrpc"
-	"gopack/xbyte"
 	"internal/typedef"
 )
 
 const (
-	TagSendClientInfoUdp = 3073
+	TagSendDeviceInfoUdp = 3073
 )
-
-type GetDeviceInfo struct {
-	*typedef.DeviceInfo
-}
-
-func (data GetDeviceInfo) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	deviceInfo, err := xbyte.StructToByte(*data.DeviceInfo)
-	if err != nil {
-		err = fmt.Errorf("StructToByte: %s", err)
-		return
-	}
-
-	err = n.Response(TagGetDeviceInfo, deviceInfo)
-	if err != nil {
-		err = fmt.Errorf("%s %s", "Response:", err)
-		return
-	}
-
-	return
-}
 
 type ConnectToServer struct {
 	TrpcDefaultHandler
 	ExecuteJsonRPC
-	*typedef.DeviceInfo
+	*typedef.GenericInfo
 }
 
 func (data ConnectToServer) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	defer n.Response(TagConnectToServer, []byte("OK"))
 
-	if data.DeviceInfo.Busy {
+	if data.GenericInfo.Busy {
 		return
 	}
 
@@ -54,6 +33,13 @@ func (data ConnectToServer) Handler(n *tagrpc.Node, tag uint16, val []byte) (err
 		return r == 0
 	})
 
+	s, err := n.Codec.Decode(val)
+	if err != nil {
+		err = fmt.Errorf("Decode: %s", err)
+		return
+	}
+
+	fmt.Println(string(s))
 	tcpAddr, err := net.ResolveTCPAddr("tcp", string(val))
 	if err != nil {
 		err = fmt.Errorf("ResolveTCPAddr: %s", err)
@@ -73,11 +59,11 @@ func (data ConnectToServer) Handler(n *tagrpc.Node, tag uint16, val []byte) (err
 	fmt.Printf("Подключился к серверу %s\n", conn.Tcp.RemoteAddr())
 
 	go func(*tagrpc.TCPConn) {
-		data.DeviceInfo.Busy = true
+		data.GenericInfo.Busy = true
 		for {
 			err = conn.Update(time.Second * 60)
 			if err != nil {
-				data.DeviceInfo.Busy = false
+				data.GenericInfo.Busy = false
 				fmt.Println(err)
 				return
 			}

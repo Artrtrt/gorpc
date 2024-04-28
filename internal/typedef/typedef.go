@@ -16,6 +16,8 @@ type SystemBoard struct {
 
 type GenericInfo struct {
 	SystemBoard SystemBoard
+	Uptime      uint64
+	Busy        bool
 }
 
 type ServerInfo struct {
@@ -23,11 +25,6 @@ type ServerInfo struct {
 	HttpAddr        [32]byte
 	ConnectionCount uint32
 	ConnectionLimit uint32
-}
-
-type DeviceInfo struct {
-	Uptime uint64
-	Busy   bool
 }
 
 type DevicePayload struct {
@@ -88,7 +85,6 @@ type Info struct {
 	SentToDB bool
 
 	GenericInfo   *GenericInfo
-	DeviceInfo    *DeviceInfo
 	DevicePayload *DevicePayload
 	ServerInfo    *ServerInfo
 }

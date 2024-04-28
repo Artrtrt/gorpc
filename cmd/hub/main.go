@@ -248,6 +248,15 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 
 			info := storage[serial]
 			conn.Storage["info"] = info
+
+			// _, err = conn.Execute(service.TagChaCha20Setup, []byte{})
+			// if err != nil {
+			// 	fmt.Println("Execute", err)
+			// 	return
+			// }
+
+			// conn.Codec = tagrpc.NewChaCha20Codec(serial[:], serial[:])
+
 			if info.WhitelistContainsServer(serverList) {
 				hub := TrpcHubServerHandler{
 					RemoteErr: service.RemoteErr{},
@@ -288,20 +297,6 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					return
 				}
 
-				deviceInfoByte, err := conn.Execute(service.TagGetDeviceInfo, []byte{})
-				if err != nil {
-					fmt.Println("Execute:", err)
-					return
-				}
-
-				var deviceInfo typedef.DeviceInfo
-				err = xbyte.ByteToStruct(deviceInfoByte, &deviceInfo)
-				if err != nil {
-					fmt.Println("ByteToStruct:", err)
-					return
-				}
-
-				info.DeviceInfo = &deviceInfo
 				_, err = serverConn.Execute(service.TagSendInfoToServer, responseGenericInfo)
 				if err != nil {
 					fmt.Println("Execute:", err)
@@ -351,14 +346,14 @@ func updateServerInfo(serial [64]byte) (err error) {
 		return
 	}
 
-	device.ServerInfo = &serverInfo
+	device.ServerInfo.ConnectionCount = serverInfo.ConnectionCount
 	return
 }
 
 // UDP
 func configureUdp(udp *udprpc.Udp) {
-	udp.HandleFunc(service.TagSendServerInfoUdp, receiveGenericServerInfo)
-	udp.HandleFunc(service.TagSendClientInfoUdp, receiveGenericDeviceInfo)
+	udp.HandleFunc(service.TagSendServerInfoUdp, receiveServerInfo)
+	udp.HandleFunc(service.TagSendDeviceInfoUdp, receiveDeviceInfo)
 
 	for {
 		err := udp.ReadAndExec()
@@ -369,7 +364,7 @@ func configureUdp(udp *udprpc.Udp) {
 	}
 }
 
-func receiveGenericServerInfo(u *udprpc.Udp, tag uint16, val []byte) (err error) {
+func receiveServerInfo(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 	genericInfo := typedef.GenericInfo{}
 	err = xbyte.ByteToStruct(val, &genericInfo)
 	if err != nil {
@@ -404,7 +399,7 @@ func receiveGenericServerInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 	return
 }
 
-func receiveGenericDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error) {
+func receiveDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 	genericInfo := typedef.GenericInfo{}
 	err = xbyte.ByteToStruct(val, &genericInfo)
 	if err != nil {
@@ -416,7 +411,9 @@ func receiveGenericDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 	info, ok := storage[genericInfo.SystemBoard.Serial]
 	if ok {
 		info.DevicePayload.Time = time
-		if info.DevicePayload.ToConnTCP && !info.DeviceInfo.Busy {
+		info.GenericInfo.Busy = genericInfo.Busy
+		info.GenericInfo.Uptime = genericInfo.Uptime
+		if info.DevicePayload.ToConnTCP && !info.GenericInfo.Busy {
 			_, err = u.Write(u.Raddr, service.TagConnectToHub, []byte(tpcAddr))
 			if err != nil {
 				err = fmt.Errorf("UdpWrite: %s", err)
@@ -427,7 +424,6 @@ func receiveGenericDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error)
 		storage[genericInfo.SystemBoard.Serial] = &typedef.Info{
 			Type:        "router",
 			GenericInfo: &genericInfo,
-			DeviceInfo:  &typedef.DeviceInfo{},
 			DevicePayload: &typedef.DevicePayload{
 				UUID: "", Time: time, ToConnTCP: false, HttpAddrChan: make(chan string, 1),
 			},

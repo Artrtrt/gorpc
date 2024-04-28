@@ -17,14 +17,12 @@ import (
 
 type TrpcClientHubHandler struct {
 	service.TrpcDefaultHandler
-	service.GetDeviceInfo
 	service.ConnectToServer
 }
 
 var (
 	privateKey  *rsa.PrivateKey
 	genericInfo *typedef.GenericInfo
-	deviceInfo  *typedef.DeviceInfo
 
 	hubUDPAddr string = "192.168.1.163:2000"
 )
@@ -36,18 +34,14 @@ func main() {
 		return
 	}
 
-	fmt.Println(string(systemBoard.Serial[:]))
-	genericInfo = &typedef.GenericInfo{SystemBoard: systemBoard}
-
 	uptime, err := telemetry.GetDeviceUptime()
 	if err != nil {
 		fmt.Println("GetUptime:", err)
 		return
 	}
 
-	deviceInfo = &typedef.DeviceInfo{
-		Uptime: uptime, Busy: false,
-	}
+	fmt.Println(string(systemBoard.Serial[:]))
+	genericInfo = &typedef.GenericInfo{SystemBoard: systemBoard, Uptime: uptime, Busy: false}
 
 	privateKey, err = utils.PemToPrivateKey("private.pem")
 	if err != nil {
@@ -76,7 +70,7 @@ func main() {
 			continue
 		}
 
-		_, err = udp.Write(UDPAddr, service.TagSendClientInfoUdp, genericInfoByte)
+		_, err = udp.Write(UDPAddr, service.TagSendDeviceInfoUdp, genericInfoByte)
 		if err != nil {
 			fmt.Println("UdpWrite:", err)
 			continue
@@ -98,7 +92,7 @@ func configureUdp(udp *udprpc.Udp) {
 }
 
 func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
-	if deviceInfo.Busy {
+	if genericInfo.Busy {
 		return
 	}
 
@@ -122,23 +116,23 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 		SendGenericInfo: service.SendGenericInfo{
 			GenericInfo: genericInfo,
 		},
+		ChaCha20Setup: service.ChaCha20Setup{
+			GenericInfo: genericInfo,
+		},
 	}
 
 	client := TrpcClientHubHandler{
 		TrpcDefaultHandler: trpcDefault,
-		GetDeviceInfo: service.GetDeviceInfo{
-			DeviceInfo: deviceInfo,
-		},
 		ConnectToServer: service.ConnectToServer{
 			TrpcDefaultHandler: trpcDefault,
 			ExecuteJsonRPC:     service.ExecuteJsonRPC{},
-			DeviceInfo:         deviceInfo,
+			GenericInfo:        genericInfo,
 		},
 	}
 	conn.HandleFunc(service.TagRemoteErr, client.RemoteErr.Handler)
 	conn.HandleFunc(service.TagRsaSetup, client.RsaSetup.Handler)
 	conn.HandleFunc(service.TagSendGenericInfo, client.SendGenericInfo.Handler)
-	conn.HandleFunc(service.TagGetDeviceInfo, client.GetDeviceInfo.Handler)
+	conn.HandleFunc(service.TagChaCha20Setup, client.ChaCha20Setup.Handler)
 	conn.HandleFunc(service.TagConnectToServer, client.ConnectToServer.Handler)
 
 	fmt.Println("Подключился к хабу")

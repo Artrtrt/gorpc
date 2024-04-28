@@ -19,9 +19,7 @@ import (
 )
 
 type TrpcServerHubHandler struct {
-	service.RemoteErr
-	service.RsaSetup
-	service.SendGenericInfo
+	service.TrpcDefaultHandler
 	service.ReceiveDeviceInfo
 	service.SendServerInfo
 }
@@ -280,7 +278,7 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 		return
 	}
 
-	server := TrpcServerHubHandler{
+	trpcDefault := service.TrpcDefaultHandler{
 		RemoteErr: service.RemoteErr{},
 		RsaSetup: service.RsaSetup{
 			PrivateKey: privateKey,
@@ -288,6 +286,13 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 		SendGenericInfo: service.SendGenericInfo{
 			GenericInfo: genericInfo,
 		},
+		ChaCha20Setup: service.ChaCha20Setup{
+			GenericInfo: genericInfo,
+		},
+	}
+
+	server := TrpcServerHubHandler{
+		TrpcDefaultHandler: trpcDefault,
 		ReceiveDeviceInfo: service.ReceiveDeviceInfo{
 			WantToConnectStorage: wantToConnectStorage,
 		},
@@ -299,6 +304,7 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 	hubConn.HandleFunc(service.TagRemoteErr, server.RemoteErr.Handler)
 	hubConn.HandleFunc(service.TagRsaSetup, server.RsaSetup.Handler)
 	hubConn.HandleFunc(service.TagSendGenericInfo, server.SendGenericInfo.Handler)
+	hubConn.HandleFunc(service.TagChaCha20Setup, server.ChaCha20Setup.Handler)
 	hubConn.HandleFunc(service.TagSendInfoToServer, server.ReceiveDeviceInfo.Handler)
 	hubConn.HandleFunc(service.TagGetServerInfo, server.SendServerInfo.Handler)
 	fmt.Println("Подключился к хабу")
