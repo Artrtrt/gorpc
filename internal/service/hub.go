@@ -100,7 +100,6 @@ func (data ReceiveSN) Handler(req interface{}) (resp interface{}, err error) {
 		return
 	}
 
-	fmt.Println(device.DevicePayload.ToConnTCP, device.GenericInfo.Busy)
 	if device.DevicePayload.ToConnTCP || device.GenericInfo.Busy {
 		err = errors.New("Устройство занято")
 		return

@@ -33,13 +33,6 @@ func (data ConnectToServer) Handler(n *tagrpc.Node, tag uint16, val []byte) (err
 		return r == 0
 	})
 
-	s, err := n.Codec.Decode(val)
-	if err != nil {
-		err = fmt.Errorf("Decode: %s", err)
-		return
-	}
-
-	fmt.Println(string(s))
 	tcpAddr, err := net.ResolveTCPAddr("tcp", string(val))
 	if err != nil {
 		err = fmt.Errorf("ResolveTCPAddr: %s", err)
