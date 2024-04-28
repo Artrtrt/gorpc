@@ -28,18 +28,6 @@ type TrpcServerdeviceHandler struct {
 	service.RemoteErr
 }
 
-type ConnectStorage map[*tagrpc.TCPConn]string
-
-func (s ConnectStorage) Find(Serial string) *tagrpc.TCPConn {
-	for conn, val := range s {
-		if val == Serial {
-			return conn
-		}
-	}
-
-	return nil
-}
-
 var (
 	privateKey        *rsa.PrivateKey
 	genericInfo       *typedef.GenericInfo
@@ -50,8 +38,7 @@ var (
 	hubUDPAddr string = "192.168.1.163:2000"
 	hubConn    *tagrpc.TCPConn
 
-	wantToConnectStorage = make(map[[64]byte]typedef.GenericInfo)
-	connectStorage       = ConnectStorage{}
+	storage = typedef.Storage{}
 )
 
 func handleCORS(next http.Handler) http.Handler {
@@ -71,15 +58,21 @@ func handleCORS(next http.Handler) http.Handler {
 
 func httpServer() {
 	http.Handle("/", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		serial := r.Header.Get("SN")
-		if serial == "" {
+		serialStr := r.Header.Get("SN")
+		if serialStr == "" {
 			rw.Write([]byte("Serial не должен быть пустым"))
 			return
 		}
 
-		conn := connectStorage.Find(serial)
-		if conn == nil {
+		var serial [64]byte
+		copy(serial[:], []byte(serialStr))
+		if !storage.RouterExist(serial) {
 			rw.Write([]byte("Устройство не найдено"))
+			return
+		}
+
+		if storage[serial].Conn == nil {
+			rw.Write([]byte("Устройство не подключено к сереверу"))
 			return
 		}
 
@@ -89,7 +82,7 @@ func httpServer() {
 			return
 		}
 
-		resp, err := conn.Execute(service.TagExecuteJsonRPC, buf)
+		resp, err := storage[serial].Conn.Execute(service.TagExecuteJsonRPC, buf)
 		if err != nil {
 			rw.Write([]byte(err.Error()))
 			return
@@ -193,9 +186,10 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			for {
 				err = conn.Update(time.Second * 60)
 				if err != nil {
-					conn.Close()
-					delete(connectStorage, conn)
+					info := conn.Storage["info"].(*typedef.Info)
+					delete(storage, info.GenericInfo.SystemBoard.Serial)
 					fmt.Printf("Отключился %s. Ошибка: %s \n", raddr, err.Error())
+					conn.Close()
 					break
 				}
 			}
@@ -235,15 +229,16 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
-			_, ok := wantToConnectStorage[genericInfo.SystemBoard.Serial]
+			device, ok := storage[genericInfo.SystemBoard.Serial]
 			if !ok {
 				conn.Write(service.TagRemoteErr, []byte("Unknown device"))
 				conn.Close()
 				return
 			}
 
-			delete(wantToConnectStorage, genericInfo.SystemBoard.Serial)
-			connectStorage[conn] = utils.ByteArrToString(genericInfo.SystemBoard.Serial[:])
+			device.DevicePayload.ToConnTCP = false
+			device.Conn = conn
+			conn.Storage["info"] = device
 			err = hubConn.Request(service.TagDeviceConnected, response)
 			if err != nil {
 				fmt.Println("Request", err)
@@ -294,7 +289,7 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 	server := TrpcServerHubHandler{
 		TrpcDefaultHandler: trpcDefault,
 		ReceiveDeviceInfo: service.ReceiveDeviceInfo{
-			WantToConnectStorage: wantToConnectStorage,
+			Storage: &storage,
 		},
 		SendServerInfo: service.SendServerInfo{
 			ServerInfoControl: serverInfoControl,
