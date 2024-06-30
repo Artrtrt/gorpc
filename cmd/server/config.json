@@ -1,0 +1,8 @@
+{
+  "ip":"localhost",
+  "tcpPort":"8083",
+  "httpPort":"8084",
+  "hubIp": "192.168.1.163",
+  "hubUdpPort": "2000",
+  "appLocal": true
+}

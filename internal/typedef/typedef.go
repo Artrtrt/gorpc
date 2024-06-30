@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"gopack/tagrpc"
 	"internal/utils"
+
+	"github.com/google/uuid"
 )
 
 type SystemBoard struct {
@@ -15,6 +17,7 @@ type SystemBoard struct {
 }
 
 type GenericInfo struct {
+	UUID        uuid.UUID
 	SystemBoard SystemBoard
 	Uptime      uint64
 	Busy        bool
@@ -28,10 +31,10 @@ type ServerInfo struct {
 }
 
 type DevicePayload struct {
-	UUID         string
 	Time         uint64
 	ToConnTCP    bool
 	HttpAddrChan chan string
+	ErrChan      chan error
 }
 
 type ServerInfoControl struct {
@@ -126,6 +129,16 @@ func (i Info) WhitelistContainsServer(whitelist []string) bool {
 
 type Storage map[[64]byte]*Info
 
+func (s Storage) GetByUUID(uuid string) *Info {
+	for _, el := range s {
+		if el.GenericInfo.UUID.String() == uuid {
+			return el
+		}
+	}
+
+	return nil
+}
+
 func (s Storage) RouterExist(serial [64]byte) bool {
 	_, ok := s[serial]
 	return ok && s[serial].Type == "router"
@@ -161,4 +174,15 @@ type ToSql struct {
 	Hostname     string `sql:"NAME=Hostname, TYPE=TEXT(64)"`
 	Serial       string `sql:"NAME=Serial, TYPE=TEXT(64)"`
 	Type         string `sql:"NAME=Type, TYPE=TEXT(64)"`
+}
+
+type Config struct {
+	Ip          string `json:"ip"`
+	TcpPort     string `json:"tcpPort"`
+	HttpPort    string `json:"httpPort"`
+	UdpPort     string `json:"udpPort"`
+	HubIp       string `json:"hubIp"`
+	HubUdpPort  string `json:"hubUdpPort"`
+	AppLocal    bool   `json:"appLocal"`
+	WebEndpoint string `json:"webEndpoint"`
 }

@@ -52,7 +52,7 @@ func handleCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, SN")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -83,9 +83,9 @@ func httpServer() {
 		}
 	})))
 
-	mux.Handle("/api/ubus/", http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		http.StripPrefix("/api/ubus/", http.FileServer(http.Dir("./static/webui"))).ServeHTTP(rw, r)
-	}))
+	mux.Handle("/api/ubus/", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		http.StripPrefix("/api/ubus/", handleCORS(http.FileServer(http.Dir("./static/webui")))).ServeHTTP(rw, r)
+	})))
 
 	http.ListenAndServe(httpAddr, mux)
 }
@@ -163,7 +163,7 @@ func main() {
 	defer udp.Close()
 	go configureUdp(udp)
 	go httpServer()
-	fmt.Println("Слухает")
+	fmt.Println("Хаб запущен")
 
 	tcpAddr, err := net.ResolveTCPAddr("tcp", tpcAddr)
 	if err != nil {
@@ -200,7 +200,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 					}
 
 					conn.Close()
-					fmt.Printf("Отключился %s. Ошибка: %s \n", addr, err.Error())
+					fmt.Printf("Отключился %s \n", addr)
 					break
 				}
 			}
@@ -241,13 +241,11 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			}
 
 			serial := genericInfo.SystemBoard.Serial
-			if !storage[serial].MatchGenericInfo(genericInfo) {
+			info := storage[serial]
+			if !info.MatchGenericInfo(genericInfo) {
 				fmt.Println("Not match genericInfo:", err)
 				return
 			}
-
-			info := storage[serial]
-			conn.Storage["info"] = info
 
 			// _, err = conn.Execute(service.TagChaCha20Setup, []byte{})
 			// if err != nil {
@@ -256,66 +254,90 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 			// }
 
 			// conn.Codec = tagrpc.NewChaCha20Codec(serial[:], serial[:])
+			conn.Storage["info"] = info
 
 			if info.WhitelistContainsServer(serverList) {
-				hub := TrpcHubServerHandler{
-					RemoteErr: service.RemoteErr{},
-					SendClientHttpAddr: service.SendClientHttpAddr{
-						HttpAddr:        httpAddr,
-						Storage:         &storage,
-						ServerPublicKey: clientPublicKey,
-					},
-				}
-
-				conn.HandleFunc(service.TagRemoteErr, hub.RemoteErr.Handler)
-				conn.HandleFunc(service.TagDeviceConnected, hub.SendClientHttpAddr.Handler)
-				serverInfo, err := getServerInfo(conn)
-				if err != nil {
-					fmt.Println("GetServerInfo", err.Error())
-					return
-				}
-
-				info.ServerInfo = &serverInfo
-				info.Conn = conn
-				for {
-					err = updateServerInfo(serial)
-					if err != nil {
-						fmt.Println("updateServerInfo:", err)
-						return
-					}
-					time.Sleep(time.Second * 20)
-				}
-			} else if storage.RouterExist(genericInfo.SystemBoard.Serial) {
-				hub := TrpcHubDeviceHandler{
-					RemoteErr: service.RemoteErr{},
-				}
-
-				conn.HandleFunc(service.TagRemoteErr, hub.RemoteErr.Handler)
-				serverConn, serverAddr, err := storage.LessBusyServer()
+				err := serverConnect(conn, info)
 				if err != nil {
 					conn.Request(1, []byte(err.Error()))
-					return
 				}
-
-				_, err = serverConn.Execute(service.TagSendInfoToServer, responseGenericInfo)
+			} else if storage.RouterExist(serial) {
+				err = deviceConnect(conn, info)
 				if err != nil {
-					fmt.Println("Execute:", err)
-					return
+					info.DevicePayload.ToConnTCP = false
+					info.DevicePayload.ErrChan <- err
+					conn.Request(1, []byte(err.Error()))
 				}
-
-				_, err = conn.Execute(service.TagConnectToServer, []byte(serverAddr[:]))
-				if err != nil {
-					fmt.Println("Execute:", err)
-					return
-				}
-
-				info.DevicePayload.ToConnTCP = false
 				conn.Close()
 			} else {
 				conn.Close()
 			}
 		}(conn)
 	}
+}
+
+func serverConnect(conn *tagrpc.TCPConn, info *typedef.Info) (err error) {
+	hub := TrpcHubServerHandler{
+		RemoteErr: service.RemoteErr{},
+		SendClientHttpAddr: service.SendClientHttpAddr{
+			HttpAddr: httpAddr,
+			Storage:  &storage,
+		},
+	}
+
+	conn.HandleFunc(service.TagRemoteErr, hub.RemoteErr.Handler)
+	conn.HandleFunc(service.TagDeviceConnected, hub.SendClientHttpAddr.Handler)
+	serverInfo, err := getServerInfo(conn)
+	if err != nil {
+		fmt.Println("GetServerInfo", err.Error())
+		return
+	}
+
+	fmt.Println(string(serverInfo.TcpAddr[:]))
+	info.ServerInfo = &serverInfo
+	info.Conn = conn
+	for {
+		err = updateServerInfo(info.GenericInfo.SystemBoard.Serial)
+		if err != nil {
+			fmt.Println("updateServerInfo:", err)
+			return
+		}
+		time.Sleep(time.Second * 20)
+	}
+}
+
+func deviceConnect(conn *tagrpc.TCPConn, info *typedef.Info) (err error) {
+	hub := TrpcHubDeviceHandler{
+		RemoteErr: service.RemoteErr{},
+	}
+
+	conn.HandleFunc(service.TagRemoteErr, hub.RemoteErr.Handler)
+	serverConn, serverAddr, err := storage.LessBusyServer()
+	if err != nil {
+		err = fmt.Errorf("%s: %s", "LessBusyServer", err.Error())
+		return
+	}
+
+	genericInfoBytes, err := xbyte.StructToByte(info.GenericInfo)
+	if err != nil {
+		err = fmt.Errorf("%s: %s", "StructToByte", err.Error())
+		return
+	}
+
+	_, err = serverConn.Execute(service.TagSendInfoToServer, genericInfoBytes)
+	if err != nil {
+		err = fmt.Errorf("%s: %s", "Execute", err.Error())
+		return
+	}
+
+	_, err = conn.Execute(service.TagConnectToServer, []byte(serverAddr[:]))
+	if err != nil {
+		err = fmt.Errorf("%s: %s", "Execute", err.Error())
+		return
+	}
+
+	info.DevicePayload.ToConnTCP = false
+	return
 }
 
 func getServerInfo(conn *tagrpc.TCPConn) (serverInfo typedef.ServerInfo, err error) {
@@ -425,7 +447,7 @@ func receiveDeviceInfo(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 			Type:        "router",
 			GenericInfo: &genericInfo,
 			DevicePayload: &typedef.DevicePayload{
-				UUID: "", Time: time, ToConnTCP: false, HttpAddrChan: make(chan string, 1),
+				Time: time, ToConnTCP: false, HttpAddrChan: make(chan string, 1), ErrChan: make(chan error, 1),
 			},
 		}
 	}

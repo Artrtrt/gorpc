@@ -1,0 +1,6 @@
+{
+  "hubIp": "192.168.1.163",
+  "hubUdpPort": "2000",
+  "appLocal": true,
+  "webEndpoint":"http://192.168.1.2/ubus"
+}

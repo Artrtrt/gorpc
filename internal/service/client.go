@@ -33,6 +33,13 @@ func (data ConnectToServer) Handler(n *tagrpc.Node, tag uint16, val []byte) (err
 		return r == 0
 	})
 
+	output, err := n.Codec.Decode(val)
+	if err != nil {
+		err = fmt.Errorf("Encode: %s", err)
+		return
+	}
+
+	fmt.Println(string(output))
 	tcpAddr, err := net.ResolveTCPAddr("tcp", string(val))
 	if err != nil {
 		err = fmt.Errorf("ResolveTCPAddr: %s", err)
@@ -67,6 +74,7 @@ func (data ConnectToServer) Handler(n *tagrpc.Node, tag uint16, val []byte) (err
 }
 
 type ExecuteJsonRPC struct {
+	Endpoint string
 }
 
 func (data ExecuteJsonRPC) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
@@ -75,7 +83,7 @@ func (data ExecuteJsonRPC) Handler(n *tagrpc.Node, tag uint16, val []byte) (err 
 	})
 
 	body := bytes.NewReader(val)
-	resp, err := http.Post("http://localhost/ubus", "application/json", body)
+	resp, err := http.Post(data.Endpoint, "application/json", body)
 	if err != nil {
 		err = fmt.Errorf("%s %s", "POST", err.Error())
 		return

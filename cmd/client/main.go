@@ -2,8 +2,10 @@ package main
 
 import (
 	"crypto/rsa"
+	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"time"
 
 	"gopack/tagrpc"
@@ -23,24 +25,49 @@ type TrpcClientHubHandler struct {
 var (
 	privateKey  *rsa.PrivateKey
 	genericInfo *typedef.GenericInfo
-
-	hubUDPAddr string = "192.168.1.163:2000"
+	config      *typedef.Config
 )
 
 func main() {
-	systemBoard, err := telemetry.GetSystemBoardInfo()
+	content, err := os.ReadFile("config.json")
 	if err != nil {
-		fmt.Println("GetSystemBoardInfo:", err)
+		fmt.Println("ReadFile:", err)
 		return
 	}
 
-	uptime, err := telemetry.GetDeviceUptime()
+	err = json.Unmarshal(content, &config)
 	if err != nil {
-		fmt.Println("GetUptime:", err)
+		fmt.Println("Unmarshal:", err)
 		return
+	}
+
+	var (
+		systemBoard typedef.SystemBoard
+		uptime      uint64
+	)
+
+	if config.AppLocal {
+		var serial [64]byte
+		copy(serial[:], []byte("014223586593338"))
+		systemBoard = typedef.SystemBoard{
+			Serial: serial,
+		}
+	} else {
+		systemBoard, err = telemetry.GetSystemBoardInfo()
+		if err != nil {
+			fmt.Println("GetSystemBoardInfo:", err)
+			return
+		}
+
+		uptime, err = telemetry.GetDeviceUptime()
+		if err != nil {
+			fmt.Println("GetUptime:", err)
+			return
+		}
 	}
 
 	fmt.Println(string(systemBoard.Serial[:]))
+	fmt.Println("Клиент запущен")
 	genericInfo = &typedef.GenericInfo{SystemBoard: systemBoard, Uptime: uptime, Busy: false}
 
 	privateKey, err = utils.PemToPrivateKey("private.pem")
@@ -49,7 +76,7 @@ func main() {
 		return
 	}
 
-	UDPAddr, err := net.ResolveUDPAddr("udp", hubUDPAddr)
+	UDPAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%s", config.HubIp, config.HubUdpPort))
 	if err != nil {
 		fmt.Println("ResolveUDPAddr:", err)
 		return
@@ -117,7 +144,7 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 			GenericInfo: genericInfo,
 		},
 		ChaCha20Setup: service.ChaCha20Setup{
-			GenericInfo: genericInfo,
+			Secret: genericInfo.SystemBoard.Serial[:],
 		},
 	}
 
@@ -125,8 +152,10 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 		TrpcDefaultHandler: trpcDefault,
 		ConnectToServer: service.ConnectToServer{
 			TrpcDefaultHandler: trpcDefault,
-			ExecuteJsonRPC:     service.ExecuteJsonRPC{},
-			GenericInfo:        genericInfo,
+			ExecuteJsonRPC: service.ExecuteJsonRPC{
+				Endpoint: config.WebEndpoint,
+			},
+			GenericInfo: genericInfo,
 		},
 	}
 	conn.HandleFunc(service.TagRemoteErr, client.RemoteErr.Handler)
@@ -141,7 +170,7 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 			err = conn.Update(time.Second * 60)
 			if err != nil {
 				conn.Close()
-				fmt.Printf("Отключился от хаба. Ошибка: %s \n", err.Error())
+				fmt.Printf("Отключился от хаба. %s \n", err.Error())
 				return
 			}
 		}

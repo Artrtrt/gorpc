@@ -2,6 +2,6 @@ module keygen
 
 go 1.20
 
-replace rsautil => ../../internal/rsautil/
+replace internal => ../../internal/
 
-require rsautil v0.0.0-00010101000000-000000000000 // indirect
+require internal v0.0.0-00010101000000-000000000000 // indirect

@@ -99,14 +99,3 @@ func ByteArrToString(arr []byte) string {
 		return r == 0
 	}))
 }
-
-// func GenerateUUID(serialNumber string) uuid.UUID {
-// 	uniqueInfo := serialNumber + time.Now().Format("20060102150405.000")
-// 	uniqueBytes := []byte(uniqueInfo)
-
-// 	hasher := md5.New()
-// 	hasher.Write(uniqueBytes)
-// 	hash := hasher.Sum(nil)
-// 	uuid.NewMD5(uuid.UUID{}, hash)
-// 	return uuid.NewMD5(uuid.UUID{}, hash)
-// }

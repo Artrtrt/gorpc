@@ -58,11 +58,11 @@ func (data RsaSetup) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error)
 }
 
 type ChaCha20Setup struct {
-	GenericInfo *typedef.GenericInfo
+	Secret []byte
 }
 
 func (data ChaCha20Setup) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-	n.Codec = tagrpc.NewChaCha20Codec(data.GenericInfo.SystemBoard.Serial[:], data.GenericInfo.SystemBoard.Serial[:])
+	n.Codec = tagrpc.NewChaCha20Codec(data.Secret, data.Secret)
 	n.Response(TagChaCha20Setup, []byte("OK"))
 	return
 }

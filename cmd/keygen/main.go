@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"rsautil"
+	"internal/utils"
 )
 
 var (
@@ -13,19 +13,19 @@ var (
 )
 
 func main() {
-	privateKey, publicKey, err := rsautil.GenerateRSAKeyPair(bits)
+	privateKey, publicKey, err := utils.GenerateRSAKeyPair(bits)
 	if err != nil {
 		fmt.Println("GenerateRSAKeyPair", err)
 		return
 	}
 
-	err = rsautil.PrivateKeytoPem(privateKeyName, privateKey)
+	err = utils.PrivateKeytoPem(privateKeyName, privateKey)
 	if err != nil {
 		fmt.Println("PrivateKeytoPem", err)
 		return
 	}
 
-	err = rsautil.PublicKeytoPem(publicKeyName, publicKey)
+	err = utils.PublicKeytoPem(publicKeyName, publicKey)
 	if err != nil {
 		fmt.Println("PublicKeytoPem", err)
 		return

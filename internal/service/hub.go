@@ -1,7 +1,6 @@
 package service
 
 import (
-	"crypto/rsa"
 	"errors"
 	"fmt"
 	"time"
@@ -22,49 +21,23 @@ const (
 )
 
 type SendClientHttpAddr struct {
-	ServerPublicKey *rsa.PublicKey
-	HttpAddr        string
-	Storage         *typedef.Storage
+	HttpAddr string
+	Storage  *typedef.Storage
 }
 
 func (data SendClientHttpAddr) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
 	deviceInfo := typedef.GenericInfo{}
 	err = xbyte.ByteToStruct(val, &deviceInfo)
 	if err != nil {
-		err = fmt.Errorf("ByteToStruct: %s", err)
+		fmt.Println("ByteToStruct:", err)
 		return
 	}
 
-	SN := utils.ByteArrToString(deviceInfo.SystemBoard.Serial[:])
 	info := n.Storage["info"].(*typedef.Info)
-	addr := "http://" + data.HttpAddr + "/api/ubus/" + "?SN=" + SN + "&endpoint=http://" + utils.ByteArrToString(info.ServerInfo.HttpAddr[:])
+	addr := "http://" + data.HttpAddr + "/api/ubus/" + "?UUID=" + deviceInfo.UUID.String() + "&endpoint=http://" + utils.ByteArrToString(info.ServerInfo.HttpAddr[:])
 	(*data.Storage)[deviceInfo.SystemBoard.Serial].DevicePayload.HttpAddrChan <- addr
 	return
 }
-
-// type GetUUID struct {
-// 	DeviceStorage *typedef.DeviceStorage
-// }
-
-// func (data GetUUID) Handler(n *tagrpc.Node, tag uint16, val []byte) (err error) {
-// 	var deviceInfo typedef.GenericInfo
-// 	err = xbyte.ByteToStruct(val, &deviceInfo)
-// 	if err != nil {
-// 		err = fmt.Errorf("ByteToStruct: %s", err)
-// 		return
-// 	}
-
-// 	uuid := utils.GenerateUUID(utils.ByteArrToString(deviceInfo.Serial[:]))
-// 	uuidByte, err := uuid.MarshalBinary()
-// 	if err != nil {
-// 		err = fmt.Errorf("MarshalBinary: %s", err)
-// 		return
-// 	}
-
-// 	data.DeviceStorage[deviceInfo.Serial].UUID = uuid.String()
-// 	n.Response(TagGetUUID, uuidByte)
-// 	return
-// }
 
 // JsonRpc
 const (
@@ -110,9 +83,10 @@ func (data ReceiveSN) Handler(req interface{}) (resp interface{}, err error) {
 	select {
 	case <-time.After(time.Second * 20):
 		device.DevicePayload.ToConnTCP = false
-		err = errors.New("Ошибка при подключении к устройству")
-		return
+		err = errors.New("Превышено время подключения к устройтву")
 	case resp = <-device.DevicePayload.HttpAddrChan:
+	case err = <-device.DevicePayload.ErrChan:
+		fmt.Println("aa")
 	}
 
 	return

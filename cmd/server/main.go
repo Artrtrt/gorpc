@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"crypto/rsa"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"gopack/tagrpc"
@@ -16,6 +18,8 @@ import (
 	"internal/typedef"
 	"internal/utils"
 	udprpc "pkg/tagrpc"
+
+	"github.com/google/uuid"
 )
 
 type TrpcServerHubHandler struct {
@@ -33,10 +37,8 @@ var (
 	genericInfo       *typedef.GenericInfo
 	serverInfoControl *typedef.ServerInfoControl
 
-	tcpAddr    string = "192.168.1.1:8083"
-	httpAddr   string = "192.168.1.1:8084"
-	hubUDPAddr string = "192.168.1.163:2000"
-	hubConn    *tagrpc.TCPConn
+	config  *typedef.Config
+	hubConn *tagrpc.TCPConn
 
 	storage = typedef.Storage{}
 )
@@ -45,7 +47,7 @@ func handleCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, SN")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -58,20 +60,19 @@ func handleCORS(next http.Handler) http.Handler {
 
 func httpServer() {
 	http.Handle("/", handleCORS(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		serialStr := r.Header.Get("SN")
-		if serialStr == "" {
-			rw.Write([]byte("Serial не должен быть пустым"))
+		uuid := r.Header.Get("UUID")
+		if uuid == "" {
+			rw.Write([]byte("UUID не должен быть пустым"))
 			return
 		}
 
-		var serial [64]byte
-		copy(serial[:], []byte(serialStr))
-		if !storage.RouterExist(serial) {
+		info := storage.GetByUUID(uuid)
+		if info == nil {
 			rw.Write([]byte("Устройство не найдено"))
 			return
 		}
 
-		if storage[serial].Conn == nil {
+		if info.Conn == nil {
 			rw.Write([]byte("Устройство не подключено к сереверу"))
 			return
 		}
@@ -82,7 +83,7 @@ func httpServer() {
 			return
 		}
 
-		resp, err := storage[serial].Conn.Execute(service.TagExecuteJsonRPC, buf)
+		resp, err := info.Conn.Execute(service.TagExecuteJsonRPC, buf)
 		if err != nil {
 			rw.Write([]byte(err.Error()))
 			return
@@ -97,17 +98,42 @@ func httpServer() {
 			return
 		}
 	})))
-	http.ListenAndServe(httpAddr, nil)
+	http.ListenAndServe(fmt.Sprintf("%s:%s", config.Ip, config.HttpPort), nil)
 }
 
 func main() {
-	systemBoard, err := telemetry.GetSystemBoardInfo()
+	content, err := os.ReadFile("config.json")
 	if err != nil {
-		fmt.Println("GetSystemBoardInfo:", err)
+		fmt.Println("ReadFile:", err)
 		return
 	}
 
+	err = json.Unmarshal(content, &config)
+	if err != nil {
+		fmt.Println("Unmarshal:", err)
+		return
+	}
+
+	var (
+		systemBoard typedef.SystemBoard
+	)
+
+	if config.AppLocal {
+		var serial [64]byte
+		copy(serial[:], []byte("014223586595694"))
+		systemBoard = typedef.SystemBoard{
+			Serial: serial,
+		}
+	} else {
+		systemBoard, err = telemetry.GetSystemBoardInfo()
+		if err != nil {
+			fmt.Println("GetSystemBoardInfo:", err)
+			return
+		}
+	}
+
 	fmt.Println(string(systemBoard.Serial[:]))
+	fmt.Println("Сервер запущен")
 	genericInfo = &typedef.GenericInfo{SystemBoard: systemBoard}
 
 	privateKey, err = utils.PemToPrivateKey("private.pem")
@@ -116,6 +142,7 @@ func main() {
 		return
 	}
 
+	tcpAddr := fmt.Sprintf("%s:%s", config.Ip, config.TcpPort)
 	addr, err := net.ResolveTCPAddr("tcp", tcpAddr)
 	if err != nil {
 		fmt.Println("ResolveTCPAddr:", err)
@@ -131,7 +158,7 @@ func main() {
 	defer tcpLr.Close()
 	go acceptTcp(tcpLr)
 	go httpServer()
-	UDPAddr, err := net.ResolveUDPAddr("udp", hubUDPAddr)
+	UDPAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%s", config.HubIp, config.HubUdpPort))
 	if err != nil {
 		fmt.Println("ResolveUDPAddr:", err)
 		return
@@ -147,7 +174,7 @@ func main() {
 	tcpAddrBytes := [32]byte{}
 	httpAddrBytes := [32]byte{}
 	copy(tcpAddrBytes[:], []byte(tcpAddr))
-	copy(httpAddrBytes[:], []byte(httpAddr))
+	copy(httpAddrBytes[:], []byte(fmt.Sprintf("%s:%s", config.Ip, config.HttpPort)))
 	serverInfoControl = typedef.NewServerInfoControl(tcpAddrBytes, httpAddrBytes, 100)
 
 	for {
@@ -188,7 +215,7 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				if err != nil {
 					info := conn.Storage["info"].(*typedef.Info)
 					delete(storage, info.GenericInfo.SystemBoard.Serial)
-					fmt.Printf("Отключился %s. Ошибка: %s \n", raddr, err.Error())
+					fmt.Printf("Отключился %s. %s \n", raddr, err.Error())
 					conn.Close()
 					break
 				}
@@ -229,17 +256,25 @@ func acceptTcp(lr *tagrpc.TCPListener) {
 				return
 			}
 
-			device, ok := storage[genericInfo.SystemBoard.Serial]
+			info, ok := storage[genericInfo.SystemBoard.Serial]
 			if !ok {
 				conn.Write(service.TagRemoteErr, []byte("Unknown device"))
 				conn.Close()
 				return
 			}
 
-			device.DevicePayload.ToConnTCP = false
-			device.Conn = conn
-			conn.Storage["info"] = device
-			err = hubConn.Request(service.TagDeviceConnected, response)
+			info.DevicePayload.ToConnTCP = false
+			info.Conn = conn
+			info.GenericInfo.UUID = uuid.New()
+			conn.Storage["info"] = info
+
+			devicePayload, err := xbyte.StructToByte(info.GenericInfo)
+			if err != nil {
+				fmt.Println("StructToByte:", err)
+				return
+			}
+
+			err = hubConn.Request(service.TagDeviceConnected, devicePayload)
 			if err != nil {
 				fmt.Println("Request", err)
 				return
@@ -282,7 +317,7 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 			GenericInfo: genericInfo,
 		},
 		ChaCha20Setup: service.ChaCha20Setup{
-			GenericInfo: genericInfo,
+			Secret: genericInfo.SystemBoard.Serial[:],
 		},
 	}
 
@@ -308,7 +343,7 @@ func connectToHub(u *udprpc.Udp, tag uint16, val []byte) (err error) {
 			err = hubConn.Update(time.Second * 60)
 			if err != nil {
 				hubConn.Close()
-				fmt.Printf("Отключился от хаба. Ошибка: %s\n", err.Error())
+				fmt.Printf("Отключился от хаба. %s\n", err.Error())
 				return
 			}
 		}

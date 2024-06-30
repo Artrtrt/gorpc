@@ -7,3 +7,4 @@
 static
 *.bash
 *.ps1
+bin
